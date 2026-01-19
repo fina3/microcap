@@ -1,0 +1,533 @@
+"""
+Loughran-McDonald Financial Sentiment Dictionary Handler.
+
+Uses the Loughran-McDonald Master Dictionary (2022) for financial text sentiment analysis.
+This dictionary is specifically designed for financial documents and provides more accurate
+sentiment scoring than general-purpose dictionaries like VADER.
+
+Reference: Loughran, T., & McDonald, B. (2011). When is a liability not a liability?
+Textual analysis, dictionaries, and 10‐Ks. The Journal of Finance, 66(1), 35-65.
+"""
+
+import logging
+from typing import Set
+
+logging.basicConfig(level=logging.INFO)
+logger = logging.getLogger(__name__)
+
+
+class SentimentDictionary:
+    """
+    Handler for financial sentiment dictionaries.
+
+    Provides word lists from Loughran-McDonald dictionary plus custom
+    hedging and confidence word lists for earnings call analysis.
+    """
+
+    def __init__(self):
+        """Initialize sentiment word lists."""
+        self._load_dictionaries()
+        logger.info("Sentiment dictionary loaded successfully")
+
+    def _load_dictionaries(self):
+        """Load all sentiment word lists."""
+        # Loughran-McDonald Positive Words (sample - top financial positive words)
+        self.positive_words = {
+            'able', 'achieve', 'achieves', 'achieving', 'accomplish', 'accomplished',
+            'accomplishes', 'accomplishing', 'advancement', 'advances', 'advancing',
+            'advantage', 'advantageous', 'advantages', 'agrees', 'alliance', 'attain',
+            'attained', 'attaining', 'attainment', 'attractive', 'benefit', 'benefited',
+            'benefiting', 'benefits', 'best', 'better', 'bolster', 'bolstered', 'bolstering',
+            'bolsters', 'boom', 'booming', 'boost', 'boosted', 'boosting', 'boosts',
+            'breakthrough', 'breakthroughs', 'brilliant', 'charitable', 'collaborate',
+            'collaborated', 'collaborating', 'collaboration', 'collaborations', 'collaborative',
+            'collaborator', 'collaborators', 'compliment', 'compliments', 'constructive',
+            'creative', 'delighted', 'delight', 'delightful', 'delighting', 'distinction',
+            'distinctive', 'distinctions', 'earn', 'earned', 'earning', 'earnings', 'ease',
+            'eased', 'eases', 'easing', 'effective', 'efficiencies', 'efficiency', 'efficient',
+            'efficiently', 'empower', 'empowered', 'empowering', 'empowers', 'enable',
+            'enabled', 'enables', 'enabling', 'enhance', 'enhanced', 'enhancement',
+            'enhancements', 'enhances', 'enhancing', 'enjoy', 'enjoyable', 'enjoyed',
+            'enjoying', 'enjoys', 'excellent', 'excellence', 'excelling', 'exceptional',
+            'exceptionally', 'excited', 'excitement', 'exciting', 'expand', 'expanded',
+            'expanding', 'expansion', 'expansions', 'expands', 'feasible', 'fantastic',
+            'favorable', 'favorably', 'gain', 'gained', 'gaining', 'gains', 'good', 'great',
+            'greater', 'greatest', 'greatly', 'grow', 'growing', 'grown', 'grows', 'growth',
+            'highs', 'highest', 'high', 'honor', 'honored', 'honoring', 'honors', 'improve',
+            'improved', 'improvement', 'improvements', 'improves', 'improving', 'impressive',
+            'impressively', 'increase', 'increased', 'increases', 'increasing', 'innovation',
+            'innovations', 'innovative', 'innovator', 'innovators', 'invent', 'invented',
+            'inventing', 'invention', 'inventions', 'inventive', 'invents', 'leader',
+            'leaders', 'leadership', 'leading', 'leads', 'lucrative', 'momentum', 'opportunities',
+            'opportunity', 'optimal', 'optimism', 'optimistic', 'optimistically', 'optimize',
+            'optimized', 'optimizing', 'outpace', 'outpaced', 'outpaces', 'outpacing',
+            'outperform', 'outperformed', 'outperforming', 'outperforms', 'perfect', 'perfected',
+            'perfecting', 'perfects', 'pleasant', 'pleased', 'pleasing', 'pleasure', 'positive',
+            'positively', 'positives', 'potential', 'potentials', 'praised', 'praising',
+            'premier', 'premiere', 'premium', 'prestige', 'prestigious', 'productive',
+            'productively', 'productivity', 'profit', 'profitability', 'profitable', 'profitably',
+            'profited', 'profiting', 'profits', 'progress', 'progressed', 'progresses',
+            'progressing', 'progression', 'progressions', 'progressive', 'progressively',
+            'prosper', 'prospered', 'prospering', 'prosperity', 'prosperous', 'prospers',
+            'rebound', 'rebounded', 'rebounding', 'rebounds', 'record', 'records', 'resolve',
+            'resolved', 'resolves', 'resolving', 'reward', 'rewarded', 'rewarding', 'rewards',
+            'rise', 'rises', 'rising', 'robust', 'safely', 'satisfaction', 'satisfactorily',
+            'satisfactory', 'satisfied', 'satisfies', 'satisfy', 'satisfying', 'secure',
+            'secured', 'securely', 'secures', 'securing', 'solid', 'solution', 'solutions',
+            'solved', 'solving', 'stability', 'stabilization', 'stabilize', 'stabilized',
+            'stabilizes', 'stabilizing', 'stable', 'strength', 'strengthen', 'strengthened',
+            'strengthening', 'strengthens', 'strengths', 'strong', 'stronger', 'strongest',
+            'strongly', 'succeed', 'succeeded', 'succeeding', 'succeeds', 'success',
+            'successes', 'successful', 'successfully', 'superior', 'surpass', 'surpassed',
+            'surpasses', 'surpassing', 'tremendous', 'tremendously', 'unmatched', 'upbeat',
+            'valuable', 'value', 'valued', 'values', 'vibrant', 'win', 'winner', 'winners',
+            'winning', 'wins', 'wonderful'
+        }
+
+        # Loughran-McDonald Negative Words (sample - top financial negative words)
+        self.negative_words = {
+            'abandon', 'abandoned', 'abandoning', 'abandonment', 'abandonments', 'abandons',
+            'abdicated', 'abdicates', 'abdicating', 'abdication', 'abdications', 'aberrant',
+            'aberration', 'aberrations', 'abetting', 'abnormal', 'abnormalities', 'abnormality',
+            'abnormally', 'abolish', 'abolished', 'abolishes', 'abolishing', 'abrogate',
+            'abrogated', 'abrogates', 'abrogating', 'abrogation', 'abrupt', 'abruptly',
+            'abruptness', 'absence', 'absences', 'absent', 'absenteeism', 'abuse', 'abused',
+            'abuses', 'abusing', 'abusive', 'accident', 'accidental', 'accidentally', 'accidents',
+            'accusation', 'accusations', 'accuse', 'accused', 'accuses', 'accusing', 'adversarial',
+            'adversaries', 'adversary', 'adverse', 'adversely', 'adversities', 'adversity',
+            'alleged', 'allegations', 'annoy', 'annoyance', 'annoying', 'annoys', 'anxieties',
+            'anxiety', 'arbitrary', 'argued', 'arguing', 'argument', 'arguments', 'artificially',
+            'assault', 'assaulted', 'assaulting', 'assaults', 'auditor', 'auditors', 'aversion',
+            'bad', 'badly', 'bail', 'bailed', 'baiting', 'bailout', 'ban', 'bankrupt',
+            'bankruptcies', 'bankruptcy', 'bans', 'barred', 'barrier', 'barriers', 'bottleneck',
+            'bottlenecks', 'boycott', 'boycotted', 'boycotting', 'boycotts', 'breach', 'breached',
+            'breaches', 'breaching', 'breakdown', 'breakdowns', 'bribe', 'bribed', 'bribery',
+            'bribes', 'bribing', 'burden', 'burdened', 'burdening', 'burdens', 'burdensome',
+            'cancel', 'canceled', 'canceling', 'cancellation', 'cancellations', 'cancelled',
+            'cancelling', 'cancels', 'careless', 'carelessly', 'carelessness', 'catastrophe',
+            'catastrophes', 'catastrophic', 'caution', 'cautionary', 'cautioned', 'cautioning',
+            'cautions', 'cease', 'ceased', 'ceases', 'ceasing', 'censure', 'censured', 'censures',
+            'censuring', 'challenge', 'challenged', 'challenges', 'challenging', 'cheat', 'cheated',
+            'cheating', 'cheats', 'claim', 'claimed', 'claims', 'coerce', 'coerced', 'coerces',
+            'coercing', 'coercion', 'coercive', 'collapse', 'collapsed', 'collapses', 'collapsing',
+            'collusion', 'complain', 'complained', 'complaining', 'complains', 'complaint',
+            'complaints', 'complicate', 'complicated', 'complicates', 'complicating', 'complication',
+            'complications', 'concern', 'concerned', 'concerns', 'confiscate', 'confiscated',
+            'confiscates', 'confiscating', 'confiscation', 'confiscations', 'conflict', 'conflicted',
+            'conflicting', 'conflicts', 'confuse', 'confused', 'confuses', 'confusing', 'confusion',
+            'conspire', 'conspired', 'conspires', 'conspiring', 'conspicuous', 'conspiracy',
+            'constraint', 'constraints', 'contaminate', 'contaminated', 'contaminates',
+            'contaminating', 'contamination', 'contempt', 'contested', 'contesting', 'contests',
+            'contingencies', 'contingency', 'contingent', 'contingently', 'contingents', 'contradict',
+            'contradicted', 'contradicting', 'contradiction', 'contradictions', 'contradictory',
+            'contradicts', 'contrary', 'controversial', 'controversies', 'controversy', 'convict',
+            'convicted', 'convicting', 'conviction', 'convictions', 'corrected', 'correcting',
+            'correction', 'corrections', 'corrects', 'corrupt', 'corrupted', 'corrupting',
+            'corruption', 'corrupts', 'costly', 'counterclaim', 'counterclaimed', 'counterclaiming',
+            'counterclaims', 'counterfeit', 'counterfeited', 'counterfeiting', 'counterfeits',
+            'crime', 'crimes', 'criminal', 'criminally', 'criminals', 'crisis', 'crises',
+            'critical', 'critically', 'criticism', 'criticisms', 'criticize', 'criticized',
+            'criticizes', 'criticizing', 'crucial', 'crucially', 'damage', 'damaged', 'damages',
+            'damaging', 'danger', 'dangerous', 'dangerously', 'dangers', 'deadlock', 'deadlocked',
+            'deadlocking', 'deadlocks', 'deceive', 'deceived', 'deceives', 'deceiving', 'deceptive',
+            'decline', 'declined', 'declines', 'declining', 'decrease', 'decreased', 'decreases',
+            'decreasing', 'defamation', 'defamations', 'defamatory', 'default', 'defaulted',
+            'defaulting', 'defaults', 'defeat', 'defeated', 'defeating', 'defeats', 'defect',
+            'defective', 'defects', 'defend', 'defendant', 'defendants', 'defended', 'defending',
+            'defends', 'defensive', 'deficiencies', 'deficiency', 'deficient', 'deficit', 'deficits',
+            'delay', 'delayed', 'delaying', 'delays', 'deliberate', 'deliberately', 'delinquency',
+            'delinquent', 'demise', 'demised', 'demises', 'demising', 'demolish', 'demolished',
+            'demolishes', 'demolishing', 'demolition', 'demolitions', 'demoted', 'demotes',
+            'demoting', 'demotion', 'demotions', 'denied', 'denies', 'deny', 'denying', 'deplete',
+            'depleted', 'depletes', 'depleting', 'depletion', 'depletions', 'depreciation',
+            'depress', 'depressed', 'depresses', 'depressing', 'depression', 'depressions',
+            'deprivation', 'deprive', 'deprived', 'deprives', 'depriving', 'derogatory', 'destabilize',
+            'destabilized', 'destabilizes', 'destabilizing', 'destroy', 'destroyed', 'destroying',
+            'destroys', 'destruction', 'destructive', 'detain', 'detained', 'detaining', 'detains',
+            'deteriorate', 'deteriorated', 'deteriorates', 'deteriorating', 'deterioration',
+            'deteriorations', 'detrimental', 'detrimentally', 'devastate', 'devastated', 'devastates',
+            'devastating', 'devastation', 'deviation', 'deviations', 'difficult', 'difficulties',
+            'difficulty', 'diminish', 'diminished', 'diminishes', 'diminishing', 'diminution',
+            'disadvantage', 'disadvantaged', 'disadvantageous', 'disadvantages', 'disagree',
+            'disagreeable', 'disagreed', 'disagreeing', 'disagreement', 'disagreements', 'disagrees',
+            'disappear', 'disappeared', 'disappearing', 'disappears', 'disappoint', 'disappointed',
+            'disappointing', 'disappointingly', 'disappointment', 'disappointments', 'disappoints',
+            'disapproval', 'disapprovals', 'disapprove', 'disapproved', 'disapproves', 'disapproving',
+            'disaster', 'disasters', 'disastrous', 'disastrously', 'disclose', 'disclosed',
+            'discloses', 'disclosing', 'discontinuance', 'discontinuances', 'discontinuation',
+            'discontinuations', 'discontinue', 'discontinued', 'discontinues', 'discontinuing',
+            'discourage', 'discouraged', 'discourages', 'discouraging', 'discrepancies', 'discrepancy',
+            'disfavor', 'disfavored', 'disfavoring', 'disfavors', 'disgorgement', 'disgorgements',
+            'disloyal', 'disloyally', 'disloyalty', 'dismal', 'dismally', 'dismiss', 'dismissed',
+            'dismisses', 'dismissing', 'dismissal', 'dismissals', 'disorderly', 'disparage',
+            'disparaged', 'disparagement', 'disparagements', 'disparages', 'disparaging', 'disparagingly',
+            'disparities', 'disparity', 'displace', 'displaced', 'displacement', 'displacements',
+            'displaces', 'displacing', 'dispose', 'disposed', 'disposes', 'disposing', 'dispute',
+            'disputed', 'disputes', 'disputing', 'disqualification', 'disqualifications', 'disqualified',
+            'disqualifies', 'disqualify', 'disqualifying', 'disregard', 'disregarded', 'disregarding',
+            'disregards', 'disreputable', 'disrepute', 'disrupt', 'disrupted', 'disrupting',
+            'disruption', 'disruptions', 'disruptive', 'disrupts', 'dissatisfaction', 'dissatisfied',
+            'distort', 'distorted', 'distorting', 'distortion', 'distortions', 'distorts', 'distract',
+            'distracted', 'distracting', 'distraction', 'distractions', 'distracts', 'distress',
+            'distressed', 'disturb', 'disturbance', 'disturbances', 'disturbed', 'disturbing',
+            'disturbs', 'diversion', 'divert', 'diverted', 'diverting', 'diverts', 'divest',
+            'divested', 'divesting', 'divestiture', 'divestitures', 'divestment', 'divestments',
+            'divests', 'doubt', 'doubted', 'doubtful', 'doubts', 'downgrade', 'downgraded',
+            'downgrades', 'downgrading', 'downsize', 'downsized', 'downsizes', 'downsizing',
+            'downsizings', 'downturn', 'downturns', 'downward', 'downwards', 'drawback', 'drawbacks',
+            'dropped', 'dropping', 'drought', 'droughts', 'duress', 'dysfunction', 'dysfunctional',
+            'dysfunctions', 'easing', 'egregious', 'egregiously', 'embargo', 'embargoed',
+            'embargoes', 'embargoing', 'embezzle', 'embezzled', 'embezzlement', 'embezzlements',
+            'embezzler', 'embezzlers', 'embezzles', 'embezzling', 'encroach', 'encroached',
+            'encroaches', 'encroaching', 'encroachment', 'encroachments', 'encumber', 'encumbered',
+            'encumbering', 'encumbers', 'encumbrance', 'encumbrances', 'endanger', 'endangered',
+            'endangering', 'endangerment', 'endangers', 'enjoin', 'enjoined', 'enjoining', 'enjoins',
+            'erode', 'eroded', 'erodes', 'eroding', 'erosion', 'erratic', 'erratically', 'erred',
+            'erring', 'erroneous', 'erroneously', 'error', 'errors', 'errs', 'escalate', 'escalated',
+            'escalates', 'escalating', 'evade', 'evaded', 'evades', 'evading', 'evasion', 'evasions',
+            'evasive', 'exacerbate', 'exacerbated', 'exacerbates', 'exacerbating', 'exacerbation',
+            'exacerbations', 'exaggerate', 'exaggerated', 'exaggerates', 'exaggerating', 'exaggeration',
+            'exaggerations', 'excessive', 'excessively', 'exonerate', 'exonerated', 'exonerates',
+            'exonerating', 'exoneration', 'exonerations', 'exploit', 'exploitation', 'exploitations',
+            'exploitative', 'exploited', 'exploiting', 'exploits', 'expose', 'exposed', 'exposes',
+            'exposing', 'exposure', 'expropriate', 'expropriated', 'expropriates', 'expropriating',
+            'expropriation', 'expropriations', 'fail', 'failed', 'failing', 'failings', 'fails',
+            'failure', 'failures', 'fallout', 'false', 'falsely', 'falsification', 'falsifications',
+            'falsified', 'falsifies', 'falsify', 'falsifying', 'falsity', 'fatalities', 'fatality',
+            'fatally', 'fault', 'faulted', 'faults', 'faulty', 'fear', 'feared', 'fearing', 'fears',
+            'felonies', 'felonious', 'felony', 'fictitious', 'fine', 'fined', 'fines', 'fining',
+            'fired', 'firing', 'flaw', 'flawed', 'flaws', 'forbid', 'forbidden', 'forbidding',
+            'forbids', 'force', 'forced', 'forcing', 'foreclose', 'foreclosed', 'forecloses',
+            'foreclosing', 'foreclosure', 'foreclosures', 'forego', 'foregone', 'forestall',
+            'forestalled', 'forestalling', 'forestalls', 'forfeit', 'forfeited', 'forfeiting',
+            'forfeits', 'forfeiture', 'forfeitures', 'forget', 'forgets', 'forgetting', 'forgot',
+            'forgotten', 'fraud', 'frauds', 'fraudulent', 'fraudulently', 'frivolous', 'frivolously',
+            'frustrate', 'frustrated', 'frustrates', 'frustrating', 'frustratingly', 'frustration',
+            'frustrations', 'fugitive', 'fugitives', 'guilty', 'halt', 'halted', 'hamper',
+            'hampered', 'hampering', 'hampers', 'harass', 'harassed', 'harassing', 'harassment',
+            'harm', 'harmed', 'harmful', 'harmfully', 'harming', 'harms', 'harsh', 'harsher',
+            'harshest', 'harshly', 'harshness', 'hazard', 'hazardous', 'hazards', 'hinder',
+            'hindered', 'hindering', 'hinders', 'hindrance', 'hindrances', 'hurt', 'hurting',
+            'hurts', 'idle', 'idled', 'idling', 'ignore', 'ignored', 'ignores', 'ignoring',
+            'ill', 'illegal', 'illegalities', 'illegality', 'illegally', 'illegible', 'illicit',
+            'illicitly', 'illiquid', 'illiquidity', 'impair', 'impaired', 'impairing', 'impairment',
+            'impairments', 'impairs', 'impasse', 'impasses', 'impede', 'impeded', 'impedes',
+            'impediment', 'impediments', 'impending', 'impending', 'imperative', 'imperil',
+            'imperiled', 'imperiling', 'imperils', 'implicate', 'implicated', 'implicates',
+            'implicating', 'implication', 'implications', 'impossible', 'impossibly', 'improper',
+            'improperly', 'improprieties', 'impropriety', 'imprudent', 'imprudently', 'inability',
+            'inaccessible', 'inaccuracies', 'inaccuracy', 'inaccurate', 'inaccurately', 'inaction',
+            'inactions', 'inactive', 'inactivity', 'inadequacies', 'inadequacy', 'inadequate',
+            'inadequately', 'inadvertent', 'inadvertently', 'inadvisable', 'inappropriate',
+            'inappropriately', 'incapable', 'incapacity', 'incarcerate', 'incarcerated', 'incarcerates',
+            'incarcerating', 'incarceration', 'incarcerations', 'incidence', 'incidences', 'incident',
+            'incidents', 'incompatibilities', 'incompatibility', 'incompatible', 'incompetence',
+            'incompetency', 'incompetent', 'incompetently', 'incomplete', 'incompletely',
+            'incompleteness', 'inconclusive', 'inconsist', 'inconsistencies', 'inconsistency',
+            'inconsistent', 'inconsistently', 'inconvenience', 'inconveniences', 'inconvenient',
+            'incorrect', 'incorrectly', 'indecency', 'indecent', 'indecently', 'indefeasible',
+            'indefeasibly', 'indefensible', 'indefensibly', 'indefinite', 'indefinitely', 'indict',
+            'indictable', 'indicted', 'indicting', 'indictment', 'indictments', 'indicts',
+            'ineffective', 'ineffectively', 'ineffectiveness', 'inefficiencies', 'inefficiency',
+            'inefficient', 'inefficiently', 'ineligible', 'ineligibility', 'inequality', 'inequitable',
+            'inequitably', 'inequities', 'inequity', 'inevitable', 'inevitably', 'inferior',
+            'inflated', 'inflating', 'inflation', 'inflationary', 'inflict', 'inflicted',
+            'inflicting', 'inflicts', 'infringe', 'infringed', 'infringement', 'infringements',
+            'infringes', 'infringing', 'inhibit', 'inhibited', 'inhibiting', 'inhibits', 'injunction',
+            'injunctions', 'injure', 'injured', 'injures', 'injuries', 'injuring', 'injurious',
+            'injury', 'inordinate', 'inordinately', 'inquiry', 'insecure', 'insecurity', 'insolvent',
+            'insolvencies', 'insolvency', 'instabilities', 'instability', 'insubordination',
+            'insufficient', 'insufficiently', 'insurrection', 'insurrections', 'intentional',
+            'intentionally', 'interfere', 'interfered', 'interference', 'interferences', 'interferes',
+            'interfering', 'interrupt', 'interrupted', 'interrupting', 'interruption', 'interruptions',
+            'interrupts', 'intimidate', 'intimidated', 'intimidates', 'intimidating', 'intimidation',
+            'intrude', 'intruded', 'intrudes', 'intruding', 'intrusion', 'intrusions', 'invalid',
+            'invalidate', 'invalidated', 'invalidates', 'invalidating', 'invalidation', 'invalidity',
+            'investigation', 'investigations', 'involuntarily', 'involuntary', 'irrational',
+            'irrationally', 'irreconcilable', 'irrecoverable', 'irrecoverably', 'irregular',
+            'irregularities', 'irregularity', 'irregularly', 'irrelevance', 'irrelevances', 'irrelevant',
+            'irreparable', 'irreparably', 'irreversible', 'irrevocable', 'irrevocably', 'jeopardize',
+            'jeopardized', 'jeopardizes', 'jeopardizing', 'jeopardy', 'kickback', 'kickbacks',
+            'knowingly', 'lack', 'lacked', 'lacking', 'lacks', 'lag', 'lagged', 'lagging', 'lags',
+            'lapse', 'lapsed', 'lapses', 'lapsing', 'laundering', 'layoff', 'layoffs', 'lie',
+            'lied', 'lies', 'limite', 'limitation', 'limitations', 'limited', 'limiting', 'limits',
+            'liquidate', 'liquidated', 'liquidates', 'liquidating', 'liquidation', 'liquidations',
+            'liquidator', 'liquidators', 'litigant', 'litigants', 'litigate', 'litigated', 'litigates',
+            'litigating', 'litigation', 'litigations', 'litigious', 'loss', 'losses', 'lost',
+            'lying', 'malfeasance', 'malfunction', 'malfunctioned', 'malfunctioning', 'malfunctions',
+            'malice', 'malicious', 'maliciously', 'malpractice', 'malpractices', 'manipulate',
+            'manipulated', 'manipulates', 'manipulating', 'manipulation', 'manipulations', 'manipulative',
+            'markdown', 'markdowns', 'misapplication', 'misapplications', 'misapplied', 'misapplies',
+            'misapply', 'misapplying', 'misapprehension', 'misapprehensions', 'misappropriate',
+            'misappropriated', 'misappropriates', 'misappropriating', 'misappropriation',
+            'misappropriations', 'misbranded', 'miscalculate', 'miscalculated', 'miscalculates',
+            'miscalculating', 'miscalculation', 'miscalculations', 'mischaracterization',
+            'mischaracterizations', 'mischaracterize', 'mischaracterized', 'mischaracterizes',
+            'mischaracterizing', 'misclassification', 'misclassifications', 'misclassified',
+            'misclassifies', 'misclassify', 'misclassifying', 'miscommunication', 'misconception',
+            'misconceptions', 'misconduct', 'misconducts', 'misdated', 'misdates', 'misdating',
+            'misdemeanor', 'misdemeanors', 'misdirect', 'misdirected', 'misdirecting', 'misdirects',
+            'miserable', 'miserably', 'miseries', 'misery', 'misfeasance', 'misfile', 'misfiled',
+            'misfiles', 'misfiling', 'misfilings', 'misguide', 'misguided', 'misguides', 'misguiding',
+            'mishandle', 'mishandled', 'mishandles', 'mishandling', 'misinform', 'misinformation',
+            'misinformed', 'misinforming', 'misinforms', 'misinterpret', 'misinterpretation',
+            'misinterpretations', 'misinterpreted', 'misinterpreting', 'misinterprets', 'misjudge',
+            'misjudged', 'misjudges', 'misjudging', 'misjudgment', 'misjudgments', 'mislabel',
+            'mislabeled', 'mislabeling', 'mislabelled', 'mislabels', 'mislead', 'misleading',
+            'misleadingly', 'misleads', 'misled', 'mismanage', 'mismanaged', 'mismanagement',
+            'mismanages', 'mismanaging', 'mismatch', 'mismatched', 'mismatches', 'mismatching',
+            'misplaced', 'misplaces', 'misplacing', 'misprice', 'mispriced', 'misprices', 'mispricing',
+            'mispricings', 'misrepresent', 'misrepresentation', 'misrepresentations', 'misrepresented',
+            'misrepresenting', 'misrepresents', 'miss', 'missed', 'misses', 'misstate', 'misstated',
+            'misstatement', 'misstatements', 'misstates', 'misstating', 'misstep', 'missteps',
+            'mistake', 'mistaken', 'mistakenly', 'mistakes', 'mistaking', 'mistrial', 'mistrials',
+            'misunderstand', 'misunderstanding', 'misunderstandings', 'misunderstood', 'misuse',
+            'misused', 'misuses', 'misusing', 'monopolistic', 'monopolists', 'monopolization',
+            'monopolize', 'monopolized', 'monopolizes', 'monopolizing', 'monopoly', 'mothballed',
+            'mothballing', 'mothballs', 'negative', 'negatively', 'negatives', 'neglect', 'neglected',
+            'neglectful', 'neglecting', 'neglects', 'negligence', 'negligences', 'negligent',
+            'negligently', 'nonattainment', 'noncompetitive', 'noncompliance', 'noncompliances',
+            'noncomplying', 'nonconforming', 'nonconformities', 'nonconformity', 'nondisclosure',
+            'nonfunctional', 'nonpayment', 'nonpayments', 'nonperform', 'nonperformance',
+            'nonperformances', 'nonperforming', 'nonperforms', 'nonproducing', 'nonproductive',
+            'nonrecoverable', 'nonrenewal', 'nonrenewals', 'nuisance', 'nuisances', 'nullification',
+            'nullifications', 'nullified', 'nullifies', 'nullify', 'nullifying', 'objected',
+            'objecting', 'objection', 'objectionable', 'objectionably', 'objections', 'objects',
+            'obligate', 'obligated', 'obligates', 'obligating', 'obligation', 'obligations',
+            'obsolescence', 'obsolete', 'obsoleted', 'obsoletes', 'obsoleting', 'obstacle', 'obstacles',
+            'obstruct', 'obstructed', 'obstructing', 'obstruction', 'obstructions', 'obstructive',
+            'obstructs', 'offence', 'offences', 'offend', 'offended', 'offender', 'offenders',
+            'offending', 'offends', 'offense', 'offenses', 'omission', 'omissions', 'omit', 'omits',
+            'omitted', 'omitting', 'opportunistic', 'opportunistically', 'oppose', 'opposed',
+            'opposes', 'opposing', 'opposition', 'oppositions', 'outage', 'outages', 'outdated',
+            'outmoded', 'overage', 'overages', 'overbuild', 'overbuilding', 'overbuilds', 'overbuilt',
+            'overburden', 'overburdened', 'overburdening', 'overburdens', 'overcapacities',
+            'overcapacity', 'overcharge', 'overcharged', 'overcharges', 'overcharging', 'overcome',
+            'overcomes', 'overcoming', 'overdue', 'overestimate', 'overestimated', 'overestimates',
+            'overestimating', 'overestimation', 'overestimations', 'overload', 'overloaded',
+            'overloading', 'overloads', 'overlook', 'overlooked', 'overlooking', 'overlooks',
+            'overpaid', 'overpayment', 'overpayments', 'overpays', 'overproduced', 'overproduces',
+            'overproducing', 'overproduction', 'overrun', 'overrunning', 'overruns', 'overshadow',
+            'overshadowed', 'overshadowing', 'overshadows', 'overstate', 'overstated', 'overstatement',
+            'overstatements', 'overstates', 'overstating', 'oversupplied', 'oversupplies',
+            'oversupply', 'oversupplying', 'overtly', 'overturn', 'overturned', 'overturning',
+            'overturns', 'overvalue', 'overvalued', 'overvalues', 'overvaluing', 'panic', 'panics',
+            'par', 'paradox', 'paradoxes', 'paradoxical', 'paradoxically', 'paralysis', 'paralyzed',
+            'paralyzes', 'paralyzing', 'penalty', 'penalties', 'penalize', 'penalized', 'penalizes',
+            'penalizing', 'pending', 'peril', 'perilous', 'perils', 'perjury', 'perpetrate',
+            'perpetrated', 'perpetrates', 'perpetrating', 'perpetration', 'perpetrations', 'perpetrator',
+            'perpetrators', 'persist', 'persisted', 'persistence', 'persistent', 'persistently',
+            'persisting', 'persists', 'pervasive', 'pervasively', 'pervasiveness', 'petty', 'picket',
+            'picketed', 'picketing', 'pickets', 'plaintiff', 'plaintiffs', 'plea', 'plead', 'pleaded',
+            'pleading', 'pleadings', 'pleads', 'pleas', 'pled', 'poor', 'poorly', 'postpone',
+            'postponed', 'postponement', 'postponements', 'postpones', 'postponing', 'precipitous',
+            'precipitously', 'preclude', 'precluded', 'precludes', 'precluding', 'predatory', 'prejudice',
+            'prejudiced', 'prejudices', 'prejudicial', 'prejudicing', 'premature', 'prematurely',
+            'pressing', 'pressure', 'pressured', 'pressures', 'pressuring', 'pretrial', 'prevent',
+            'preventable', 'prevented', 'preventing', 'prevents', 'problem', 'problematic', 'problematical',
+            'problems', 'prolong', 'prolongation', 'prolongations', 'prolonged', 'prolonging', 'prolongs',
+            'prone', 'prosecute', 'prosecuted', 'prosecutes', 'prosecuting', 'prosecution', 'prosecutions',
+            'protest', 'protested', 'protester', 'protesters', 'protesting', 'protests', 'protracted',
+            'protraction', 'provoke', 'provoked', 'provokes', 'provoking', 'proximately', 'punished',
+            'punishes', 'punishing', 'punishment', 'punishments', 'punitive', 'purport', 'purported',
+            'purportedly', 'purporting', 'purports', 'question', 'questionable', 'questionably',
+            'questioned', 'questioning', 'questions', 'quit', 'quits', 'quitting', 'racketeer',
+            'racketeering', 'racketeers', 'rationalization', 'rationalizations', 'rationalize',
+            'rationalized', 'rationalizes', 'rationalizing', 'reassess', 'reassessed', 'reassesses',
+            'reassessing', 'reassessment', 'reassessments', 'recall', 'recalled', 'recalling',
+            'recalls', 'recession', 'recessionary', 'recessions', 'reckless', 'recklessly',
+            'recklessness', 'redact', 'redacted', 'redacting', 'redaction', 'redactions', 'redacts',
+            'refusal', 'refusals', 'refuse', 'refused', 'refuses', 'refusing', 'reject', 'rejected',
+            'rejecting', 'rejection', 'rejections', 'rejects', 'renounce', 'renounced', 'renouncement',
+            'renouncements', 'renounces', 'renouncing', 'reparation', 'reparations', 'repossessed',
+            'repossesses', 'repossessing', 'repossession', 'repossessions', 'repudiate', 'repudiated',
+            'repudiates', 'repudiating', 'repudiation', 'repudiations', 'resignation', 'resignations',
+            'resigned', 'resigning', 'resigns', 'restate', 'restated', 'restatement', 'restatements',
+            'restates', 'restating', 'restructure', 'restructured', 'restructures', 'restructuring',
+            'restructurings', 'retaliate', 'retaliated', 'retaliates', 'retaliating', 'retaliation',
+            'retaliations', 'retaliatory', 'retribution', 'retributions', 'revocable', 'revocation',
+            'revocations', 'revoke', 'revoked', 'revokes', 'revoking', 'ridicule', 'ridiculed',
+            'ridicules', 'ridiculing', 'ridiculous', 'ridiculously', 'riskier', 'riskiest', 'risky',
+            'sabotage', 'sabotaged', 'sabotages', 'sabotaging', 'sacrifice', 'sacrificed', 'sacrifices',
+            'sacrificing', 'sanction', 'sanctioned', 'sanctioning', 'sanctions', 'scandals', 'scrutinize',
+            'scrutinized', 'scrutinizes', 'scrutinizing', 'scrutiny', 'seasonally', 'seize', 'seized',
+            'seizes', 'seizing', 'seizure', 'seizures', 'serious', 'seriously', 'seriousness', 'setback',
+            'setbacks', 'sever', 'severe', 'severed', 'severely', 'severities', 'severity', 'severing',
+            'severs', 'sharply', 'short', 'shortage', 'shortages', 'shortfall', 'shortfalls', 'shrinkage',
+            'shrinkages', 'shut', 'shutdown', 'shutdowns', 'shuts', 'shutting', 'sieze', 'siezed',
+            'siezes', 'siezing', 'slander', 'slandered', 'slanderous', 'slandering', 'slanders',
+            'slowdown', 'slowdowns', 'slowed', 'slower', 'slowing', 'slowness', 'slows', 'sluggish',
+            'sluggishly', 'sluggishness', 'solvencies', 'solvency', 'stagger', 'staggered', 'staggering',
+            'staggeringly', 'staggers', 'stagnant', 'stagnate', 'stagnated', 'stagnates', 'stagnating',
+            'stagnation', 'standstill', 'standstills', 'stolen', 'stoppage', 'stoppages', 'stopped',
+            'stopping', 'stops', 'strain', 'strained', 'straining', 'strains', 'stress', 'stressed',
+            'stresses', 'stressful', 'stressing', 'stringent', 'stringently', 'struggle', 'struggled',
+            'struggles', 'struggling', 'subjected', 'subjecting', 'subjection', 'subjects', 'subpoena',
+            'subpoenaed', 'subpoenaing', 'subpoenas', 'substandard', 'substantial', 'substantially',
+            'substantiated', 'substantiates', 'substantiating', 'substantiation', 'sue', 'sued',
+            'sues', 'suffer', 'suffered', 'suffering', 'suffers', 'suing', 'summoned', 'summoning',
+            'summons', 'summonses', 'surcharge', 'surcharged', 'surcharges', 'surcharging', 'surrender',
+            'surrendered', 'surrendering', 'surrenders', 'suspect', 'suspected', 'suspects', 'suspend',
+            'suspended', 'suspending', 'suspends', 'suspension', 'suspensions', 'suspicion', 'suspicions',
+            'suspicious', 'suspiciously', 'taint', 'tainted', 'tainting', 'taints', 'tamper',
+            'tampered', 'tampering', 'tampers', 'tense', 'terminate', 'terminated', 'terminates',
+            'terminating', 'termination', 'terminations', 'testify', 'testifying', 'threat', 'threaten',
+            'threatened', 'threatening', 'threateningly', 'threatens', 'threats', 'tighten', 'tightened',
+            'tightening', 'tightens', 'tolerate', 'tolerated', 'tolerates', 'tolerating', 'toleration',
+            'tortuous', 'tortuously', 'tragedies', 'tragedy', 'tragic', 'tragically', 'transgress',
+            'transgressed', 'transgresses', 'transgressing', 'transgression', 'transgressions',
+            'transgressor', 'transgressors', 'trauma', 'traumatic', 'trouble', 'troubled', 'troubles',
+            'troublesome', 'troubling', 'turmoil', 'unable', 'unacceptable', 'unacceptably', 'unaccounted',
+            'unannounced', 'unanticipated', 'unapproved', 'unattractive', 'unauthorized', 'unavailability',
+            'unavailable', 'unavoidable', 'unavoidably', 'unaware', 'unbudgeted', 'uncollectable',
+            'uncollectability', 'uncollected', 'uncollectibility', 'uncollectible', 'unconscionable',
+            'unconscionably', 'uncontrollable', 'uncontrollably', 'uncontrolled', 'uncorrected',
+            'uncovered', 'undercapitalized', 'undercut', 'undercuts', 'undercutting', 'underestimate',
+            'underestimated', 'underestimates', 'underestimating', 'underestimation', 'undermine',
+            'undermined', 'undermines', 'undermining', 'underpaid', 'underpayment', 'underpayments',
+            'underpays', 'underperform', 'underperformance', 'underperformed', 'underperforming',
+            'underperforms', 'underproduce', 'underproduced', 'underproduces', 'underproducing',
+            'underproduction', 'underreporting', 'understate', 'understated', 'understatement',
+            'understatements', 'understates', 'understating', 'undesirable', 'undesired', 'undetected',
+            'undetermined', 'undisclosed', 'undo', 'undocumented', 'undoing', 'undone', 'undos',
+            'unduly', 'unearned', 'uneconomic', 'uneconomical', 'unemployed', 'unemployment', 'unethical',
+            'unethically', 'unexcused', 'unexpected', 'unexpectedly', 'unfair', 'unfairly', 'unfavorable',
+            'unfavorably', 'unfavored', 'unfeasible', 'unfit', 'unfitness', 'unforeseeable', 'unforeseen',
+            'unfortunate', 'unfortunately', 'unfound', 'unfounded', 'unfriendly', 'unfulfillable',
+            'unfulfilled', 'unfunded', 'unfunded', 'ungoverned', 'unhealthy', 'unidentified', 'unilateral',
+            'unilaterally', 'uninsured', 'unintended', 'unintentional', 'unintentionally', 'unjust',
+            'unjustifiable', 'unjustifiably', 'unjustified', 'unjustly', 'unknowing', 'unknowingly',
+            'unlawful', 'unlawfully', 'unlawfulness', 'unlicensed', 'unlikelihood', 'unlikely', 'unlimited',
+            'unmarketable', 'unmerchantable', 'unmeritorious', 'unnecessary', 'unneeded', 'unobtainable',
+            'unoccupied', 'unopposed', 'unpaid', 'unpatented', 'unplanned', 'unpleasant', 'unpopular',
+            'unprecedented', 'unpredictability', 'unpredictable', 'unpredictably', 'unpredicted',
+            'unproductive', 'unprofitability', 'unprofitable', 'unprofitably', 'unprotected', 'unproved',
+            'unproven', 'unqualified', 'unrealistic', 'unreasonable', 'unreasonableness', 'unreasonably',
+            'unrecognized', 'unreconcilable', 'unreconciled', 'unrecoverable', 'unrecovered', 'unrectified',
+            'unredressed', 'unreimbursed', 'unreliability', 'unreliable', 'unremedied', 'unremitted',
+            'unreported', 'unresolved', 'unrest', 'unreturned', 'unsafe', 'unsalable', 'unsaleable',
+            'unsatisfactory', 'unsatisfied', 'unsavory', 'unscheduled', 'unscrupulous', 'unscrupulously',
+            'unsecured', 'unseemly', 'unserviceable', 'unsettle', 'unsettled', 'unsettles', 'unsettling',
+            'unsold', 'unsound', 'unstable', 'unsuccessful', 'unsuccessfully', 'unsuitable', 'unsuitably',
+            'unsuited', 'unsupported', 'unsure', 'unsurprising', 'unsurprisingly', 'unsuspected',
+            'unsuspecting', 'unsustainable', 'untenable', 'untested', 'untimely', 'untrue', 'untrustworthy',
+            'untruthful', 'untruthfully', 'untruthfulness', 'untruths', 'unusable', 'unusual', 'unusually',
+            'unwarranted', 'unwelcome', 'unwieldy', 'unwilling', 'unwillingness', 'unworkable', 'upheaval',
+            'upset', 'urgency', 'urgent', 'usurp', 'usurped', 'usurping', 'usurps', 'usury', 'vandalism',
+            'vandalization', 'vandalizations', 'vandalize', 'vandalized', 'vandalizes', 'vandalizing',
+            'verdicts', 'vetoed', 'vetoes', 'vetoing', 'veto', 'victims', 'violate', 'violated',
+            'violates', 'violating', 'violation', 'violations', 'violative', 'violator', 'violators',
+            'violence', 'violent', 'violently', 'vitiable', 'vitiate', 'vitiated', 'vitiates', 'vitiating',
+            'vitiation', 'void', 'voidable', 'voided', 'voiding', 'voids', 'volatile', 'volatilities',
+            'volatility', 'vulnerabilities', 'vulnerability', 'vulnerable', 'vulnerably', 'warn', 'warned',
+            'warning', 'warnings', 'warns', 'wasted', 'wasteful', 'wasting', 'weak', 'weaken', 'weakened',
+            'weakening', 'weakens', 'weaker', 'weakest', 'weakly', 'weakness', 'weaknesses', 'worsen',
+            'worsened', 'worsening', 'worsens', 'worse', 'worst', 'worthless', 'writedown', 'writedowns',
+            'writeoff', 'writeoffs', 'wrong', 'wrongdoing', 'wrongdoings', 'wrongful', 'wrongfully',
+            'wrongly'
+        }
+
+        # Loughran-McDonald Uncertainty/Modal Words (subset)
+        self.uncertainty_words = {
+            'ambiguity', 'ambiguous', 'appear', 'appeared', 'appearing', 'appears', 'approximate',
+            'approximated', 'approximately', 'approximates', 'approximating', 'approximation',
+            'approximations', 'believe', 'believed', 'believes', 'believing', 'cautious',
+            'cautiously', 'conceivable', 'conceivably', 'conditional', 'conditionally', 'confuse',
+            'confused', 'confusing', 'confusingly', 'confusion', 'contingencies', 'contingency',
+            'contingent', 'contingently', 'contingents', 'could', 'depend', 'depended', 'dependence',
+            'dependency', 'dependent', 'depending', 'depends', 'destabilization', 'destabilize',
+            'destabilized', 'destabilizing', 'doubt', 'doubted', 'doubtful', 'doubts', 'exposure',
+            'exposures', 'fluctuate', 'fluctuated', 'fluctuates', 'fluctuating', 'fluctuation',
+            'fluctuations', 'hidden', 'hinders', 'impair', 'impaired', 'impairing', 'impairment',
+            'impairments', 'impairs', 'imprecise', 'imprecision', 'improbability', 'improbable',
+            'improbably', 'inappropriate', 'inappropriately', 'inaccuracies', 'inaccuracy',
+            'inaccurate', 'inaccurately', 'incompleteness', 'inconclusive', 'indefinite',
+            'indefinitely', 'indeterminable', 'indeterminate', 'inexact', 'inexactness',
+            'instabilities', 'instability', 'intangible', 'intangibles', 'likelihood', 'may',
+            'maybe', 'might', 'nearly', 'nearly', 'pending', 'perhaps', 'possibilities',
+            'possibility', 'possible', 'possibly', 'potential', 'potentially', 'precarious',
+            'precariously', 'precariousness', 'predict', 'predictability', 'predictable',
+            'predictably', 'predicted', 'predicting', 'prediction', 'predictions', 'predicts',
+            'preliminary', 'presume', 'presumed', 'presumes', 'presuming', 'presumption',
+            'presumptions', 'presumably', 'probable', 'probably', 'random', 'randomized',
+            'randomizing', 'randomly', 'randomness', 'reassess', 'reassessed', 'reassesses',
+            'reassessing', 'reassessment', 'reassessments', 'recalculate', 'recalculated',
+            'recalculates', 'recalculating', 'recalculation', 'recalculations', 'reconsider',
+            'reconsidered', 'reconsidering', 'reconsiders', 'reconsideration', 'reconsiderations',
+            'risk', 'risked', 'riskier', 'riskiest', 'riskiness', 'risking', 'risks', 'risky',
+            'rough', 'roughly', 'seems', 'seldom', 'seldomly', 'sometime', 'sometimes',
+            'somewhat', 'somewhere', 'speculative', 'sporadic', 'sporadically', 'sudden',
+            'suddenly', 'suggest', 'suggested', 'suggesting', 'suggests', 'tentative',
+            'tentatively', 'turbulence', 'turmoil', 'uncertain', 'uncertainly', 'uncertainties',
+            'uncertainty', 'unclear', 'undecided', 'undefined', 'undependability', 'undependable',
+            'under', 'undeterminable', 'undetermined', 'unexpected', 'unexpectedly',
+            'unforecasted', 'unforseen', 'unguaranteed', 'unhedged', 'unidentifiable',
+            'unidentified', 'unknown', 'unknowable', 'unknowingly', 'unpredictability',
+            'unpredictable', 'unpredictably', 'unpredicted', 'unquantifiable', 'unquantified',
+            'unseeable', 'unsettled', 'unspecified', 'unusual', 'unusually', 'vagaries',
+            'vagary', 'vague', 'vaguely', 'vagueness', 'vaguer', 'vaguest', 'variability',
+            'variable', 'variables', 'variance', 'variances', 'variant', 'variants', 'variation',
+            'variations', 'varied', 'varies', 'vary', 'varying', 'volatile', 'volatilities',
+            'volatility'
+        }
+
+        # Custom hedging words (management uncertainty indicators)
+        self.hedging_words = {
+            'might', 'possibly', 'uncertain', 'risk', 'could', 'may', 'potentially',
+            'perhaps', 'seems', 'appear', 'likely', 'probable', 'somewhat', 'maybe'
+        }
+
+        # Custom confidence words (management certainty indicators)
+        self.confidence_words = {
+            'will', 'certainly', 'confident', 'committed', 'strong', 'definitely',
+            'ensure', 'guarantee', 'assured', 'determined', 'resolve', 'absolute',
+            'clearly', 'decidedly', 'undoubtedly', 'unquestionably'
+        }
+
+        logger.info(f"Loaded {len(self.positive_words)} positive words")
+        logger.info(f"Loaded {len(self.negative_words)} negative words")
+        logger.info(f"Loaded {len(self.uncertainty_words)} uncertainty words")
+        logger.info(f"Loaded {len(self.hedging_words)} hedging words")
+        logger.info(f"Loaded {len(self.confidence_words)} confidence words")
+
+    def is_positive(self, word: str) -> bool:
+        """Check if word is in positive dictionary."""
+        return word.lower() in self.positive_words
+
+    def is_negative(self, word: str) -> bool:
+        """Check if word is in negative dictionary."""
+        return word.lower() in self.negative_words
+
+    def is_uncertainty(self, word: str) -> bool:
+        """Check if word is in uncertainty dictionary."""
+        return word.lower() in self.uncertainty_words
+
+    def is_hedging(self, word: str) -> bool:
+        """Check if word is a hedging word (management uncertainty)."""
+        return word.lower() in self.hedging_words
+
+    def is_confidence(self, word: str) -> bool:
+        """Check if word is a confidence word (management certainty)."""
+        return word.lower() in self.confidence_words
+
+    def get_word_category(self, word: str) -> str:
+        """
+        Get primary category for a word.
+
+        Returns: 'positive', 'negative', 'uncertainty', 'hedging', 'confidence', or 'neutral'
+        """
+        word_lower = word.lower()
+
+        # Check in order of specificity (more specific first)
+        if word_lower in self.hedging_words:
+            return 'hedging'
+        if word_lower in self.confidence_words:
+            return 'confidence'
+        if word_lower in self.positive_words:
+            return 'positive'
+        if word_lower in self.negative_words:
+            return 'negative'
+        if word_lower in self.uncertainty_words:
+            return 'uncertainty'
+
+        return 'neutral'
