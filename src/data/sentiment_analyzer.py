@@ -50,6 +50,21 @@ class SentimentResult:
     confidence_count: int = 0
     total_words: int = 0
 
+    # Sentiment change tracking (comparing current to prior filing)
+    prior_sentiment: Optional[float] = None  # Prior filing's net_sentiment
+    prior_filing_date: Optional[datetime] = None  # Date of prior filing
+    sentiment_change: Optional[float] = None  # current - prior sentiment
+    sentiment_momentum: int = 0  # 1 = improving, -1 = declining, 0 = stable/unknown
+
+    # Multi-source sentiment (8-K and 10-Q)
+    sentiment_8k: Optional[float] = None  # Sentiment from 8-K filing
+    sentiment_10q: Optional[float] = None  # Sentiment from 10-Q MD&A
+    sentiment_combined: Optional[float] = None  # Weighted: 0.4*8k + 0.6*10q
+    filing_date_8k: Optional[datetime] = None
+    filing_date_10q: Optional[datetime] = None
+    words_8k: int = 0  # Word count from 8-K
+    words_10q: int = 0  # Word count from 10-Q MD&A
+
     # Data quality
     text_length: int = 0
     data_quality_score: float = 1.0
@@ -74,6 +89,17 @@ class SentimentResult:
             'hedging_count': self.hedging_count,
             'confidence_count': self.confidence_count,
             'total_words': self.total_words,
+            'prior_sentiment': self.prior_sentiment,
+            'prior_filing_date': self.prior_filing_date,
+            'sentiment_change': self.sentiment_change,
+            'sentiment_momentum': self.sentiment_momentum,
+            'sentiment_8k': self.sentiment_8k,
+            'sentiment_10q': self.sentiment_10q,
+            'sentiment_combined': self.sentiment_combined,
+            'filing_date_8k': self.filing_date_8k,
+            'filing_date_10q': self.filing_date_10q,
+            'words_8k': self.words_8k,
+            'words_10q': self.words_10q,
             'text_length': self.text_length,
             'data_quality_score': self.data_quality_score,
             'quality_flags': ','.join(self.quality_flags) if self.quality_flags else ''

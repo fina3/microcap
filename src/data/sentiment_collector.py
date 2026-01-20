@@ -69,14 +69,20 @@ class SentimentCollector:
         lookback_days: int = 365
     ) -> Optional[SentimentResult]:
         """
-        Collect sentiment for most recent available 8-K for a ticker.
+        Collect sentiment from both 8-K and 10-Q filings for a ticker.
+
+        Analyzes:
+        - 8-K Item 2.02 (earnings announcements)
+        - 10-Q MD&A section (more comprehensive quarterly analysis)
+
+        Combined sentiment = 0.4 * 8K + 0.6 * 10Q (10-Q weighted higher)
 
         Args:
             ticker: Stock ticker symbol
             lookback_days: How far back to search for filings
 
         Returns:
-            SentimentResult or None if no valid filings found
+            SentimentResult with combined sentiment, or None if no valid filings
         """
         logger.info(f"\n{'='*60}")
         logger.info(f"Collecting sentiment for {ticker}")
@@ -92,14 +98,12 @@ class SentimentCollector:
         start_date = self.as_of_date - timedelta(days=lookback_days)
         end_date = self.as_of_date
 
-        logger.info(
-            f"{ticker}: Searching for 8-K filings "
-            f"from {start_date.date()} to {end_date.date()} "
-            f"available as of {self.as_of_date.date()}"
-        )
+        quality_flags = []
 
-        # Find 8-K filings
-        filings = self.fetcher.find_8k_filings(
+        # ===== ANALYZE 8-K FILINGS =====
+        logger.info(f"{ticker}: Searching for 8-K filings...")
+
+        filings_8k = self.fetcher.find_8k_filings(
             ticker=ticker,
             start_date=start_date,
             end_date=end_date,
@@ -107,53 +111,104 @@ class SentimentCollector:
             item_filter=["2.02"]
         )
 
-        if not filings:
-            self.quality_tracker.log_missing(ticker, '8k_filing', self.as_of_date)
+        sentiment_8k = None
+        filing_date_8k = None
+        words_8k = 0
+        result_8k = None
+
+        if filings_8k:
+            current_8k = filings_8k[0]
+            prior_8k = filings_8k[1] if len(filings_8k) > 1 else None
+            self.filing_metadata[ticker] = current_8k
+
+            logger.info(f"{ticker}: Found 8-K filed {current_8k.filing_date.date()}")
+
+            content_8k = self.fetcher.fetch_filing_content(current_8k, self.as_of_date)
+            if content_8k:
+                text_8k = content_8k.item_202_text or content_8k.extracted_text
+                if text_8k:
+                    result_8k = self.analyzer.analyze_text(
+                        text=text_8k,
+                        as_of_date=self.as_of_date,
+                        filing_date=current_8k.filing_date,
+                        ticker=ticker
+                    )
+                    sentiment_8k = result_8k.net_sentiment
+                    filing_date_8k = current_8k.filing_date
+                    words_8k = result_8k.total_words
+                    quality_flags.extend(content_8k.quality_notes)
+                    logger.info(f"{ticker}: 8-K sentiment = {sentiment_8k:.3f} ({words_8k} words)")
+        else:
+            quality_flags.append('NO_8K_FOUND')
             logger.warning(f"{ticker}: No 8-K filings with Item 2.02 found")
 
-            # Return result with quality flags
-            return SentimentResult(
-                ticker=ticker,
-                as_of_date=self.as_of_date,
-                filing_date=self.as_of_date,  # Placeholder
-                positive_score=0.0,
-                negative_score=0.0,
-                net_sentiment=0.0,
-                uncertainty_score=0.0,
-                hedging_ratio=0.0,
-                confidence_ratio=0.0,
-                polarity=0.0,
-                data_quality_score=0.0,
-                quality_flags=['NO_8K_FOUND']
-            )
+        # ===== ANALYZE 10-Q FILINGS =====
+        logger.info(f"{ticker}: Searching for 10-Q filings...")
 
-        # Use most recent filing
-        filing = filings[0]
-        self.filing_metadata[ticker] = filing
-
-        logger.info(
-            f"{ticker}: Using 8-K filed {filing.filing_date.date()} "
-            f"available as of {self.as_of_date.date()}"
+        filings_10q = self.fetcher.find_10q_filings(
+            ticker=ticker,
+            start_date=start_date,
+            end_date=end_date,
+            as_of_date=self.as_of_date
         )
 
-        # Check if filing is old
-        days_old = (self.as_of_date - filing.filing_date).days
-        quality_flags = []
-        if days_old > 180:
-            quality_flags.append('OLD_FILING')
-            logger.warning(f"{ticker}: Most recent 8-K is {days_old} days old")
+        sentiment_10q = None
+        filing_date_10q = None
+        words_10q = 0
+        result_10q = None
 
-        # Fetch content
-        content = self.fetcher.fetch_filing_content(filing, self.as_of_date)
+        if filings_10q:
+            current_10q = filings_10q[0]
+            logger.info(f"{ticker}: Found 10-Q filed {current_10q.filing_date.date()}")
 
-        if content is None:
-            self.quality_tracker.log_missing(ticker, '8k_content', self.as_of_date)
-            logger.error(f"{ticker}: Failed to fetch filing content")
+            content_10q = self.fetcher.fetch_10q_content(current_10q, self.as_of_date)
+            if content_10q:
+                text_10q = content_10q.mda_text or content_10q.extracted_text
+                if text_10q:
+                    result_10q = self.analyzer.analyze_text(
+                        text=text_10q,
+                        as_of_date=self.as_of_date,
+                        filing_date=current_10q.filing_date,
+                        ticker=ticker
+                    )
+                    sentiment_10q = result_10q.net_sentiment
+                    filing_date_10q = current_10q.filing_date
+                    words_10q = result_10q.total_words
+                    quality_flags.extend(content_10q.quality_notes)
+                    logger.info(f"{ticker}: 10-Q sentiment = {sentiment_10q:.3f} ({words_10q} words)")
+        else:
+            quality_flags.append('NO_10Q_FOUND')
+            logger.warning(f"{ticker}: No 10-Q filings found")
 
+        # ===== CALCULATE COMBINED SENTIMENT =====
+        # Weights: 10-Q gets more weight (0.6) because MD&A is more comprehensive
+        WEIGHT_8K = 0.4
+        WEIGHT_10Q = 0.6
+
+        if sentiment_8k is not None and sentiment_10q is not None:
+            # Both available - weighted average
+            sentiment_combined = WEIGHT_8K * sentiment_8k + WEIGHT_10Q * sentiment_10q
+            logger.info(
+                f"{ticker}: Combined sentiment = {sentiment_combined:.3f} "
+                f"(8K: {sentiment_8k:.3f} * {WEIGHT_8K} + 10Q: {sentiment_10q:.3f} * {WEIGHT_10Q})"
+            )
+        elif sentiment_10q is not None:
+            # Only 10-Q available
+            sentiment_combined = sentiment_10q
+            quality_flags.append('10Q_ONLY')
+            logger.info(f"{ticker}: Using 10-Q sentiment only: {sentiment_combined:.3f}")
+        elif sentiment_8k is not None:
+            # Only 8-K available
+            sentiment_combined = sentiment_8k
+            quality_flags.append('8K_ONLY')
+            logger.info(f"{ticker}: Using 8-K sentiment only: {sentiment_combined:.3f}")
+        else:
+            # No filings found
+            logger.warning(f"{ticker}: No valid filings found")
             return SentimentResult(
                 ticker=ticker,
                 as_of_date=self.as_of_date,
-                filing_date=filing.filing_date,
+                filing_date=self.as_of_date,
                 positive_score=0.0,
                 negative_score=0.0,
                 net_sentiment=0.0,
@@ -162,52 +217,88 @@ class SentimentCollector:
                 confidence_ratio=0.0,
                 polarity=0.0,
                 data_quality_score=0.0,
-                quality_flags=['FETCH_FAILED']
+                quality_flags=['NO_FILINGS_FOUND']
             )
 
-        # Add quality notes from content extraction
-        quality_flags.extend(content.quality_notes)
+        # ===== BUILD RESULT =====
+        # Use the more comprehensive source (10-Q if available) as the base result
+        base_result = result_10q if result_10q else result_8k
+        primary_filing_date = filing_date_10q or filing_date_8k
 
-        # Analyze sentiment
-        text_to_analyze = content.item_202_text or content.extracted_text
+        # Calculate sentiment change from prior 8-K (if available)
+        prior_sentiment = None
+        prior_filing_date = None
+        sentiment_change = None
+        sentiment_momentum = 0
 
-        if not text_to_analyze:
-            logger.warning(f"{ticker}: No text content to analyze")
-            return SentimentResult(
-                ticker=ticker,
-                as_of_date=self.as_of_date,
-                filing_date=filing.filing_date,
-                positive_score=0.0,
-                negative_score=0.0,
-                net_sentiment=0.0,
-                uncertainty_score=0.0,
-                hedging_ratio=0.0,
-                confidence_ratio=0.0,
-                polarity=0.0,
-                data_quality_score=0.0,
-                quality_flags=['NO_TEXT_CONTENT']
-            )
+        if filings_8k and len(filings_8k) > 1:
+            prior_8k = filings_8k[1]
+            prior_content = self.fetcher.fetch_filing_content(prior_8k, self.as_of_date)
+            if prior_content:
+                prior_text = prior_content.item_202_text or prior_content.extracted_text
+                if prior_text:
+                    prior_result = self.analyzer.analyze_text(
+                        text=prior_text,
+                        as_of_date=self.as_of_date,
+                        filing_date=prior_8k.filing_date,
+                        ticker=ticker
+                    )
+                    prior_sentiment = prior_result.net_sentiment
+                    prior_filing_date = prior_8k.filing_date
+                    sentiment_change = sentiment_combined - prior_sentiment
 
-        result = self.analyzer.analyze_text(
-            text=text_to_analyze,
+                    if sentiment_change > 0.05:
+                        sentiment_momentum = 1
+                    elif sentiment_change < -0.05:
+                        sentiment_momentum = -1
+                    else:
+                        sentiment_momentum = 0
+
+        # Create final result
+        result = SentimentResult(
+            ticker=ticker,
             as_of_date=self.as_of_date,
-            filing_date=filing.filing_date,
-            ticker=ticker
+            filing_date=primary_filing_date,
+            positive_score=base_result.positive_score,
+            negative_score=base_result.negative_score,
+            net_sentiment=sentiment_combined,  # Use combined as primary
+            uncertainty_score=base_result.uncertainty_score,
+            hedging_ratio=base_result.hedging_ratio,
+            confidence_ratio=base_result.confidence_ratio,
+            polarity=base_result.polarity,
+            positive_count=base_result.positive_count,
+            negative_count=base_result.negative_count,
+            uncertainty_count=base_result.uncertainty_count,
+            hedging_count=base_result.hedging_count,
+            confidence_count=base_result.confidence_count,
+            total_words=words_8k + words_10q,
+            prior_sentiment=prior_sentiment,
+            prior_filing_date=prior_filing_date,
+            sentiment_change=sentiment_change,
+            sentiment_momentum=sentiment_momentum,
+            sentiment_8k=sentiment_8k,
+            sentiment_10q=sentiment_10q,
+            sentiment_combined=sentiment_combined,
+            filing_date_8k=filing_date_8k,
+            filing_date_10q=filing_date_10q,
+            words_8k=words_8k,
+            words_10q=words_10q,
+            text_length=base_result.text_length,
+            data_quality_score=1.0,
+            quality_flags=list(set(quality_flags))
         )
 
-        # Merge quality flags
-        existing_flags = result.quality_flags or []
-        result.quality_flags = list(set(existing_flags + quality_flags))
-
-        # Recalculate quality score with merged flags
+        # Adjust quality score based on flags
         if result.quality_flags:
             penalty = len(result.quality_flags) * 0.1
-            result.data_quality_score = max(0.0, result.data_quality_score - penalty)
+            result.data_quality_score = max(0.0, 1.0 - penalty)
 
         logger.info(
-            f"{ticker}: Sentiment analysis complete - "
-            f"net_sentiment={result.net_sentiment:.3f}, "
-            f"polarity={result.polarity:.3f}, "
+            f"{ticker}: Analysis complete - "
+            f"combined={sentiment_combined:.3f}, "
+            f"8K={sentiment_8k if sentiment_8k else 'N/A'}, "
+            f"10Q={sentiment_10q if sentiment_10q else 'N/A'}, "
+            f"words={words_8k + words_10q}, "
             f"quality={result.data_quality_score:.2f}"
         )
 
@@ -216,7 +307,8 @@ class SentimentCollector:
     def collect_all_tickers(
         self,
         tickers: List[str],
-        lookback_days: int = 365
+        lookback_days: int = 365,
+        show_progress: bool = True
     ) -> pd.DataFrame:
         """
         Collect sentiment for all tickers.
@@ -224,14 +316,17 @@ class SentimentCollector:
         Args:
             tickers: List of ticker symbols
             lookback_days: How far back to search for filings
+            show_progress: Whether to show progress logging
 
         Returns:
             DataFrame with sentiment scores and metadata
         """
+        total = len(tickers)
+
         logger.info(f"\n{'='*60}")
         logger.info("SENTIMENT DATA COLLECTION")
         logger.info(f"{'='*60}")
-        logger.info(f"Tickers: {', '.join(tickers)}")
+        logger.info(f"Total tickers to process: {total}")
         logger.info(f"As of date: {self.as_of_date.date()}")
         logger.info(f"Lookback: {lookback_days} days")
         logger.info(f"Data retrieved: {self.data_retrieved_date.strftime('%Y-%m-%d %H:%M:%S %Z')}")
@@ -239,10 +334,17 @@ class SentimentCollector:
 
         self.results = []
 
-        for ticker in tickers:
+        for i, ticker in enumerate(tickers, 1):
+            if show_progress:
+                pct = (i / total) * 100
+                print(f"\rProgress: {i}/{total} ({pct:.1f}%) - Processing {ticker}...", end='', flush=True)
+
             result = self.collect_sentiment(ticker, lookback_days)
             if result:
                 self.results.append(result)
+
+        if show_progress:
+            print()  # New line after progress
 
         # Convert to DataFrame
         if not self.results:

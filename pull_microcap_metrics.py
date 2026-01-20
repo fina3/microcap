@@ -7,15 +7,20 @@ Fetches all required metrics with temporal tracking and data quality monitoring.
 import sys
 sys.path.append('src')
 
+import argparse
+import glob as globlib
 import yfinance as yf
 import pandas as pd
 import numpy as np
 from datetime import datetime
+from pathlib import Path
 import pytz
 import logging
 from typing import Dict, List, Optional
 
 from utils.temporal import ensure_utc, calculate_reporting_date, get_fiscal_quarter
+from data.earnings_fetcher import EarningsFetcher
+from data.insider_fetcher import InsiderFetcher
 
 # Setup logging
 logging.basicConfig(
@@ -24,8 +29,27 @@ logging.basicConfig(
 )
 logger = logging.getLogger(__name__)
 
-# Micro-cap tickers to analyze
-TICKERS = ["AORT", "QCRH", "NBN", "TRS", "TCBX", "REVG", "RDVT", "NATR", "MTRN", "AIOT"]
+# Default micro-cap tickers to analyze
+DEFAULT_TICKERS = ["AORT", "QCRH", "NBN", "TRS", "TCBX", "REVG", "RDVT", "NATR", "MTRN", "AIOT"]
+
+
+def find_latest_universe_file(directory: str = 'data/raw') -> Optional[str]:
+    """Find the most recent universe CSV file."""
+    pattern = f'{directory}/universe_*.csv'
+    files = globlib.glob(pattern)
+
+    if not files:
+        return None
+
+    # Sort by filename (date is in filename YYYYMMDD)
+    files.sort(reverse=True)
+    return files[0]
+
+
+def load_universe_tickers(filepath: str) -> List[str]:
+    """Load tickers from universe CSV file."""
+    df = pd.read_csv(filepath)
+    return df['ticker'].tolist()
 
 
 class MicroCapMetricsCollector:
@@ -42,6 +66,8 @@ class MicroCapMetricsCollector:
         self.data_retrieved_date = datetime.now(pytz.utc)
         self.results = []
         self.missing_metrics = {}
+        self.earnings_fetcher = EarningsFetcher()
+        self.insider_fetcher = InsiderFetcher()
 
     def collect_all_metrics(self, ticker: str) -> Dict:
         """
@@ -263,8 +289,223 @@ class MicroCapMetricsCollector:
                 missing.append('52_week_price_change_pct')
                 logger.warning(f"Error calculating 52-week price change: {e}")
 
+            # 13. Earnings Surprise
+            try:
+                earnings_data = self.earnings_fetcher.fetch_earnings_surprise(
+                    ticker=ticker,
+                    as_of_date=self.as_of_date
+                )
+                result['earnings_surprise'] = earnings_data.surprise
+                result['earnings_surprise_pct'] = earnings_data.surprise_pct
+                result['actual_eps'] = earnings_data.actual_eps
+                result['expected_eps'] = earnings_data.expected_eps
+                result['earnings_report_date'] = earnings_data.report_date
+                result['earnings_data_quality'] = earnings_data.data_quality
+
+                if earnings_data.surprise is not None:
+                    logger.info(f"Earnings Surprise: {earnings_data.surprise_pct:+.1f}%")
+                else:
+                    missing.append('earnings_surprise')
+                    logger.warning(f"Missing: Earnings Surprise")
+            except Exception as e:
+                result['earnings_surprise'] = None
+                result['earnings_surprise_pct'] = None
+                result['actual_eps'] = None
+                result['expected_eps'] = None
+                result['earnings_report_date'] = None
+                result['earnings_data_quality'] = 0.0
+                missing.append('earnings_surprise')
+                logger.warning(f"Error fetching earnings surprise: {e}")
+
+            # 14. Accruals Ratio (earnings quality metric)
+            # accruals_ratio = (net_income - operating_cash_flow) / total_assets
+            # Lower is better (cash earnings > paper earnings)
+            try:
+                # Get net income from info or financials
+                net_income = info.get('netIncomeToCommon', np.nan)
+                if pd.isna(net_income):
+                    # Try from quarterly financials
+                    if not quarterly_financials.empty and 'Net Income' in quarterly_financials.index:
+                        net_income = quarterly_financials.loc['Net Income'].iloc[0]
+
+                # Get total assets from balance sheet (not in info)
+                total_assets = np.nan
+                if not quarterly_balance.empty:
+                    # Try different possible row names
+                    for asset_name in ['Total Assets', 'TotalAssets']:
+                        if asset_name in quarterly_balance.index:
+                            total_assets = quarterly_balance.loc[asset_name].iloc[0]
+                            break
+
+                # operating_cash_flow already fetched above from info
+
+                result['net_income'] = net_income if pd.notna(net_income) else None
+                result['total_assets'] = total_assets if pd.notna(total_assets) else None
+
+                if pd.notna(net_income):
+                    logger.info(f"Net Income: ${net_income:,.0f}")
+                else:
+                    logger.warning(f"Missing: Net Income")
+
+                if pd.notna(total_assets):
+                    logger.info(f"Total Assets: ${total_assets:,.0f}")
+                else:
+                    logger.warning(f"Missing: Total Assets")
+
+                # Calculate accruals ratio
+                if (pd.notna(net_income) and pd.notna(operating_cash_flow) and
+                    pd.notna(total_assets) and total_assets != 0):
+                    accruals_ratio = (net_income - operating_cash_flow) / total_assets
+                    result['accruals_ratio'] = accruals_ratio
+                    logger.info(f"Accruals Ratio: {accruals_ratio:.4f}")
+                else:
+                    result['accruals_ratio'] = None
+                    missing.append('accruals_ratio')
+                    logger.warning(f"Missing: Accruals Ratio (insufficient data)")
+
+            except Exception as e:
+                result['net_income'] = None
+                result['total_assets'] = None
+                result['accruals_ratio'] = None
+                missing.append('accruals_ratio')
+                logger.warning(f"Error calculating accruals ratio: {e}")
+
+            # 15. Revenue Growth, Gross Margin, Operating Margin
+            # revenue_growth = (revenue_ttm - revenue_prior_year) / revenue_prior_year
+            # gross_margin = gross_profit / revenue
+            # operating_margin = operating_income / revenue
+            try:
+                # Get annual financials for YoY comparison
+                annual_financials = stock.financials
+
+                # Initialize values
+                revenue_ttm = np.nan
+                revenue_prior = np.nan
+                gross_profit = np.nan
+                operating_income = np.nan
+
+                # Get revenue (TTM from info, or from financials)
+                revenue_ttm = info.get('totalRevenue', np.nan)
+                if pd.isna(revenue_ttm) and not annual_financials.empty:
+                    for rev_name in ['Total Revenue', 'TotalRevenue', 'Revenue']:
+                        if rev_name in annual_financials.index:
+                            revenue_ttm = annual_financials.loc[rev_name].iloc[0]
+                            break
+
+                # Get prior year revenue for growth calculation
+                if not annual_financials.empty and len(annual_financials.columns) >= 2:
+                    for rev_name in ['Total Revenue', 'TotalRevenue', 'Revenue']:
+                        if rev_name in annual_financials.index:
+                            revenue_prior = annual_financials.loc[rev_name].iloc[1]
+                            break
+
+                # Get gross profit
+                gross_profit = info.get('grossProfit', np.nan)
+                if pd.isna(gross_profit) and not annual_financials.empty:
+                    for gp_name in ['Gross Profit', 'GrossProfit']:
+                        if gp_name in annual_financials.index:
+                            gross_profit = annual_financials.loc[gp_name].iloc[0]
+                            break
+
+                # Get operating income
+                operating_income = info.get('operatingIncome', np.nan)
+                if pd.isna(operating_income) and not annual_financials.empty:
+                    for oi_name in ['Operating Income', 'OperatingIncome', 'EBIT']:
+                        if oi_name in annual_financials.index:
+                            operating_income = annual_financials.loc[oi_name].iloc[0]
+                            break
+
+                # Store raw values
+                result['revenue_ttm'] = revenue_ttm if pd.notna(revenue_ttm) else None
+                result['revenue_prior_year'] = revenue_prior if pd.notna(revenue_prior) else None
+                result['gross_profit'] = gross_profit if pd.notna(gross_profit) else None
+                result['operating_income'] = operating_income if pd.notna(operating_income) else None
+
+                # Calculate revenue growth
+                if pd.notna(revenue_ttm) and pd.notna(revenue_prior) and revenue_prior != 0:
+                    revenue_growth = (revenue_ttm - revenue_prior) / abs(revenue_prior)
+                    result['revenue_growth'] = revenue_growth
+                    logger.info(f"Revenue Growth: {revenue_growth*100:+.1f}%")
+                else:
+                    result['revenue_growth'] = None
+                    missing.append('revenue_growth')
+                    if pd.isna(revenue_prior):
+                        logger.warning(f"Missing: Revenue Growth (no prior year data)")
+                    else:
+                        logger.warning(f"Missing: Revenue Growth")
+
+                # Calculate gross margin
+                if pd.notna(gross_profit) and pd.notna(revenue_ttm) and revenue_ttm != 0:
+                    gross_margin = gross_profit / revenue_ttm
+                    result['gross_margin'] = gross_margin
+                    logger.info(f"Gross Margin: {gross_margin*100:.1f}%")
+                else:
+                    result['gross_margin'] = None
+                    missing.append('gross_margin')
+                    logger.warning(f"Missing: Gross Margin")
+
+                # Calculate operating margin
+                if pd.notna(operating_income) and pd.notna(revenue_ttm) and revenue_ttm != 0:
+                    operating_margin = operating_income / revenue_ttm
+                    result['operating_margin'] = operating_margin
+                    logger.info(f"Operating Margin: {operating_margin*100:.1f}%")
+                else:
+                    result['operating_margin'] = None
+                    missing.append('operating_margin')
+                    logger.warning(f"Missing: Operating Margin")
+
+            except Exception as e:
+                result['revenue_ttm'] = None
+                result['revenue_prior_year'] = None
+                result['revenue_growth'] = None
+                result['gross_profit'] = None
+                result['gross_margin'] = None
+                result['operating_income'] = None
+                result['operating_margin'] = None
+                missing.extend(['revenue_growth', 'gross_margin', 'operating_margin'])
+                logger.warning(f"Error calculating revenue metrics: {e}")
+
+            # 16. Insider Activity (from SEC Form 4 filings)
+            # Tracks insider buying/selling over last 90 days
+            try:
+                insider_activity = self.insider_fetcher.get_insider_activity(
+                    ticker=ticker,
+                    as_of_date=self.as_of_date,
+                    lookback_days=90
+                )
+
+                result['insider_net_purchases_90d'] = insider_activity.net_purchases
+                result['insider_buy_ratio'] = insider_activity.buy_ratio
+                result['insider_shares_bought'] = insider_activity.total_bought
+                result['insider_shares_sold'] = insider_activity.total_sold
+                result['insider_num_transactions'] = insider_activity.num_transactions
+                result['insider_data_quality'] = insider_activity.data_quality
+
+                if insider_activity.buy_ratio is not None:
+                    logger.info(
+                        f"Insider Activity: net={insider_activity.net_purchases:+,.0f} shares, "
+                        f"buy_ratio={insider_activity.buy_ratio:.2f}"
+                    )
+                else:
+                    if insider_activity.num_transactions == 0:
+                        # No transactions is valid data, not missing
+                        logger.info(f"Insider Activity: No transactions in 90 days")
+                    else:
+                        missing.append('insider_buy_ratio')
+                        logger.warning(f"Missing: Insider Buy Ratio")
+
+            except Exception as e:
+                result['insider_net_purchases_90d'] = None
+                result['insider_buy_ratio'] = None
+                result['insider_shares_bought'] = None
+                result['insider_shares_sold'] = None
+                result['insider_num_transactions'] = None
+                result['insider_data_quality'] = 0.0
+                missing.append('insider_activity')
+                logger.warning(f"Error fetching insider activity: {e}")
+
             # Calculate data completeness score
-            total_metrics = 11  # Total number of key metrics we're tracking
+            total_metrics = 17  # Total number of key metrics we're tracking
             metrics_retrieved = total_metrics - len(set(missing))  # Use set to avoid double-counting
             completeness_score = (metrics_retrieved / total_metrics) * 100
 
@@ -292,27 +533,37 @@ class MicroCapMetricsCollector:
                 'data_completeness_score': 0.0
             }
 
-    def collect_all_tickers(self, tickers: List[str]) -> pd.DataFrame:
+    def collect_all_tickers(self, tickers: List[str], show_progress: bool = True) -> pd.DataFrame:
         """
         Collect metrics for all tickers.
 
         Args:
             tickers: List of ticker symbols
+            show_progress: Whether to show progress logging
 
         Returns:
             DataFrame with all collected metrics
         """
+        total = len(tickers)
+
         logger.info(f"\n{'='*60}")
         logger.info(f"MICRO-CAP METRICS COLLECTION")
         logger.info(f"{'='*60}")
-        logger.info(f"Tickers: {', '.join(tickers)}")
+        logger.info(f"Total tickers to process: {total}")
         logger.info(f"As of date: {self.as_of_date.date()}")
         logger.info(f"Data retrieved: {self.data_retrieved_date.strftime('%Y-%m-%d %H:%M:%S %Z')}")
         logger.info(f"{'='*60}")
 
-        for ticker in tickers:
+        for i, ticker in enumerate(tickers, 1):
+            if show_progress:
+                pct = (i / total) * 100
+                print(f"\rProgress: {i}/{total} ({pct:.1f}%) - Processing {ticker}...", end='', flush=True)
+
             result = self.collect_all_metrics(ticker)
             self.results.append(result)
+
+        if show_progress:
+            print()  # New line after progress
 
         # Convert to DataFrame
         df = pd.DataFrame(self.results)
@@ -356,39 +607,142 @@ class MicroCapMetricsCollector:
         logger.info(f"\n{'='*60}")
 
 
+def parse_args():
+    """Parse command line arguments."""
+    parser = argparse.ArgumentParser(
+        description='Pull comprehensive metrics for micro-cap tickers'
+    )
+
+    parser.add_argument(
+        '--universe',
+        action='store_true',
+        help='Use tickers from latest universe file (data/raw/universe_*.csv)'
+    )
+
+    parser.add_argument(
+        '--universe-file',
+        type=str,
+        default=None,
+        help='Specific universe CSV file to use'
+    )
+
+    parser.add_argument(
+        '--tickers',
+        type=str,
+        default=None,
+        help='Comma-separated list of tickers (overrides --universe)'
+    )
+
+    parser.add_argument(
+        '--limit',
+        type=int,
+        default=None,
+        help='Limit to first N tickers (for testing)'
+    )
+
+    parser.add_argument(
+        '--as-of-date',
+        type=str,
+        default=None,
+        help='As-of date in YYYY-MM-DD format (default: today)'
+    )
+
+    parser.add_argument(
+        '--output-dir',
+        type=str,
+        default='data/raw',
+        help='Output directory (default: data/raw)'
+    )
+
+    parser.add_argument(
+        '--quiet',
+        action='store_true',
+        help='Reduce logging verbosity'
+    )
+
+    return parser.parse_args()
+
+
 def main():
     """Main execution function."""
+    args = parse_args()
+
     print("\n" + "="*70)
     print("MICRO-CAP METRICS COLLECTION")
     print("="*70)
 
-    # Use current date as as_of_date
-    as_of_date = datetime.now(pytz.utc)
+    # Determine tickers to process
+    if args.tickers:
+        tickers = [t.strip().upper() for t in args.tickers.split(',')]
+        source = "command line"
+    elif args.universe or args.universe_file:
+        if args.universe_file:
+            universe_file = args.universe_file
+        else:
+            universe_file = find_latest_universe_file()
+
+        if universe_file is None:
+            logger.error("No universe file found. Run pull_universe.py first.")
+            sys.exit(1)
+
+        tickers = load_universe_tickers(universe_file)
+        source = universe_file
+    else:
+        tickers = DEFAULT_TICKERS
+        source = "default list"
+
+    # Apply limit if specified
+    if args.limit and args.limit > 0:
+        tickers = tickers[:args.limit]
+        print(f"Limited to first {args.limit} tickers")
+
+    # Parse as-of date
+    if args.as_of_date:
+        try:
+            as_of_date = datetime.strptime(args.as_of_date, '%Y-%m-%d')
+            as_of_date = pytz.utc.localize(as_of_date)
+        except ValueError:
+            logger.error(f"Invalid date format: {args.as_of_date}. Use YYYY-MM-DD")
+            sys.exit(1)
+    else:
+        as_of_date = datetime.now(pytz.utc)
+
+    print(f"\nConfiguration:")
+    print(f"  Source: {source}")
+    print(f"  Tickers to process: {len(tickers)}")
+    print(f"  As-of date: {as_of_date.date()}")
+    print(f"  Output directory: {args.output_dir}")
+    print("="*70)
+
+    # Reduce logging if quiet mode
+    if args.quiet:
+        logging.getLogger().setLevel(logging.WARNING)
 
     # Create collector
     collector = MicroCapMetricsCollector(as_of_date=as_of_date)
 
     # Collect metrics for all tickers
-    df = collector.collect_all_tickers(TICKERS)
+    df = collector.collect_all_tickers(tickers, show_progress=True)
 
     # Print summary
     collector.print_summary(df)
 
     # Save to CSV
     date_str = as_of_date.strftime('%Y%m%d')
-    output_file = f'data/raw/microcap_metrics_{date_str}.csv'
+    output_file = f'{args.output_dir}/microcap_metrics_{date_str}.csv'
 
     df.to_csv(output_file, index=False)
-    logger.info(f"\n✓ Metrics saved to: {output_file}")
+    logger.info(f"\nMetrics saved to: {output_file}")
 
     # Also save a human-readable summary
-    summary_file = f'data/raw/microcap_metrics_{date_str}_summary.txt'
+    summary_file = f'{args.output_dir}/microcap_metrics_{date_str}_summary.txt'
     with open(summary_file, 'w') as f:
         f.write("="*70 + "\n")
         f.write("MICRO-CAP METRICS COLLECTION SUMMARY\n")
         f.write("="*70 + "\n")
         f.write(f"\nCollection Date: {as_of_date.strftime('%Y-%m-%d %H:%M:%S %Z')}\n")
-        f.write(f"Tickers: {', '.join(TICKERS)}\n")
+        f.write(f"Source: {source}\n")
+        f.write(f"Tickers processed: {len(tickers)}\n")
         f.write(f"\nAverage Data Completeness: {df['data_completeness_score'].mean():.1f}%\n")
         f.write("\n" + "-"*70 + "\n")
         f.write("DATA COMPLETENESS BY TICKER\n")
@@ -402,10 +756,12 @@ def main():
             if missing != 'None':
                 f.write(f"  Missing: {missing}\n")
 
-    logger.info(f"✓ Summary saved to: {summary_file}")
+    logger.info(f"Summary saved to: {summary_file}")
 
     print("\n" + "="*70)
     print("COLLECTION COMPLETE")
+    print(f"Processed {len(df)} tickers")
+    print(f"Output: {output_file}")
     print("="*70)
 
     return df

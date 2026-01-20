@@ -61,16 +61,25 @@ class MicroCapPredictor:
     METRIC_FEATURES = [
         'pe_ratio', 'pb_ratio', 'price_to_sales', 'debt_to_equity',
         'short_interest', 'insider_ownership', 'institutional_ownership',
-        'momentum'
+        'momentum', 'earnings_surprise', 'accruals_ratio',
+        'revenue_growth', 'gross_margin', 'operating_margin',
+        'insider_buy_ratio'
     ]
 
     # Feature columns from sentiment
     SENTIMENT_FEATURES = [
-        'sentiment', 'polarity', 'uncertainty'
+        'sentiment', 'polarity', 'uncertainty', 'sentiment_change', 'sentiment_momentum'
+    ]
+
+    # Sector-relative features (stock value / sector median)
+    # Values < 1.0 = cheaper than sector average (for valuation metrics)
+    SECTOR_RELATIVE_FEATURES = [
+        'pe_vs_sector', 'pb_vs_sector', 'ps_vs_sector',
+        'growth_vs_sector', 'margin_vs_sector'
     ]
 
     # Derived features
-    DERIVED_FEATURES = ['value_score', 'quality_score']
+    DERIVED_FEATURES = ['value_score', 'quality_score', 'sector_value_score']
 
     def __init__(
         self,
@@ -174,16 +183,110 @@ class MicroCapPredictor:
         features['institutional_ownership'] = df['institutional_ownership_pct']
         features['momentum'] = df['52_week_price_change_pct']
 
+        # Earnings surprise (handle NaN - will be imputed below)
+        if 'earnings_surprise' in df.columns:
+            features['earnings_surprise'] = df['earnings_surprise']
+        else:
+            features['earnings_surprise'] = np.nan
+            logger.warning("earnings_surprise column not found, using NaN")
+
+        # Accruals ratio (lower is better - cash earnings > paper earnings)
+        if 'accruals_ratio' in df.columns:
+            features['accruals_ratio'] = df['accruals_ratio']
+        else:
+            features['accruals_ratio'] = np.nan
+            logger.warning("accruals_ratio column not found, using NaN")
+
+        # Revenue growth (YoY)
+        if 'revenue_growth' in df.columns:
+            features['revenue_growth'] = df['revenue_growth']
+        else:
+            features['revenue_growth'] = np.nan
+            logger.warning("revenue_growth column not found, using NaN")
+
+        # Gross margin (gross_profit / revenue)
+        if 'gross_margin' in df.columns:
+            features['gross_margin'] = df['gross_margin']
+        else:
+            features['gross_margin'] = np.nan
+            logger.warning("gross_margin column not found, using NaN")
+
+        # Operating margin (operating_income / revenue)
+        if 'operating_margin' in df.columns:
+            features['operating_margin'] = df['operating_margin']
+        else:
+            features['operating_margin'] = np.nan
+            logger.warning("operating_margin column not found, using NaN")
+
+        # Insider buy ratio (from Form 4 filings)
+        if 'insider_buy_ratio' in df.columns:
+            features['insider_buy_ratio'] = df['insider_buy_ratio']
+        else:
+            features['insider_buy_ratio'] = np.nan
+            logger.warning("insider_buy_ratio column not found, using NaN")
+
         # Sentiment features
         features['sentiment'] = df['net_sentiment'].fillna(0)
         features['polarity'] = df['polarity'].fillna(0)
         features['uncertainty'] = df['uncertainty_score'].fillna(0)
 
+        # Sentiment change features (more predictive than absolute levels)
+        if 'sentiment_change' in df.columns:
+            features['sentiment_change'] = df['sentiment_change'].fillna(0)
+        else:
+            features['sentiment_change'] = 0
+            logger.warning("sentiment_change column not found, using 0")
+
+        if 'sentiment_momentum' in df.columns:
+            features['sentiment_momentum'] = df['sentiment_momentum'].fillna(0)
+        else:
+            features['sentiment_momentum'] = 0
+            logger.warning("sentiment_momentum column not found, using 0")
+
+        # Sector-relative features (stock value / sector median)
+        # Values < 1.0 = cheaper than sector average
+        if 'pe_trailing_vs_sector' in df.columns:
+            features['pe_vs_sector'] = df['pe_trailing_vs_sector'].fillna(1.0)
+        else:
+            features['pe_vs_sector'] = 1.0
+            logger.warning("pe_trailing_vs_sector not found, using 1.0")
+
+        if 'pb_ratio_vs_sector' in df.columns:
+            features['pb_vs_sector'] = df['pb_ratio_vs_sector'].fillna(1.0)
+        else:
+            features['pb_vs_sector'] = 1.0
+            logger.warning("pb_ratio_vs_sector not found, using 1.0")
+
+        if 'price_to_sales_vs_sector' in df.columns:
+            features['ps_vs_sector'] = df['price_to_sales_vs_sector'].fillna(1.0)
+        else:
+            features['ps_vs_sector'] = 1.0
+            logger.warning("price_to_sales_vs_sector not found, using 1.0")
+
+        if 'revenue_growth_vs_sector' in df.columns:
+            features['growth_vs_sector'] = df['revenue_growth_vs_sector'].fillna(1.0)
+        else:
+            features['growth_vs_sector'] = 1.0
+            logger.warning("revenue_growth_vs_sector not found, using 1.0")
+
+        if 'operating_margin_vs_sector' in df.columns:
+            features['margin_vs_sector'] = df['operating_margin_vs_sector'].fillna(1.0)
+        else:
+            features['margin_vs_sector'] = 1.0
+            logger.warning("operating_margin_vs_sector not found, using 1.0")
+
         # Derived features
-        # Value score: higher = more undervalued
+        # Value score: higher = more undervalued (absolute)
         pe_safe = features['pe_ratio'].replace(0, np.nan)
         pb_safe = features['pb_ratio'].replace(0, np.nan)
         features['value_score'] = (1 / pe_safe).fillna(0) + (1 / pb_safe).fillna(0)
+
+        # Sector-relative value score: lower pe_vs_sector + lower pb_vs_sector = better value
+        # Invert so higher = more undervalued relative to sector
+        features['sector_value_score'] = (
+            (2.0 - features['pe_vs_sector'].clip(0, 2)) +
+            (2.0 - features['pb_vs_sector'].clip(0, 2))
+        ) / 2.0
 
         # Quality score from sentiment data quality
         features['quality_score'] = df['data_quality_score'].fillna(0.5)

@@ -1,0 +1,60 @@
+======================================================================
+MICRO-CAP WEEKLY ANALYSIS - 2026-01-20
+======================================================================
+
+Universe: 529 stocks screened
+Analyzed: 15 stocks with valid metrics
+
+----------------------------------------------------------------------
+TOP RECOMMENDATIONS
+----------------------------------------------------------------------
+ 1. AENT   - OUTPERFORM (64%) - Buy $494 (64 shares @ $7.71) [Communication Services]
+     Stop: $6.56 | Target: $10.03
+ 2. ABOS   - OUTPERFORM (62%) - Buy $499 (267 shares @ $1.87) [Healthcare]
+     Stop: $1.59 | Target: $2.43
+ 3. ACRS   - OUTPERFORM (61%) - Buy $498 (122 shares @ $4.08) [Healthcare]
+     Stop: $3.47 | Target: $5.31
+
+----------------------------------------------------------------------
+PAPER TRADING PERFORMANCE
+----------------------------------------------------------------------
+Total positions tracked: 8
+Active positions: 8
+Completed trades: 0
+Current unrealized return: -0.4%
+
+----------------------------------------------------------------------
+SECTOR BREAKDOWN
+----------------------------------------------------------------------
+  Healthcare: 2 positions
+  Communication Services: 1 position
+
+----------------------------------------------------------------------
+TOP PREDICTIVE FEATURES
+----------------------------------------------------------------------
+   1. momentum: 0.2130
+   2. pb_ratio: 0.1017
+   3. debt_to_equity: 0.1013
+   4. short_interest: 0.0909
+   5. pb_vs_sector: 0.0617
+   6. sector_value_score: 0.0479
+   7. sentiment: 0.0402
+   8. value_score: 0.0402
+   9. uncertainty: 0.0393
+  10. accruals_ratio: 0.0371
+
+----------------------------------------------------------------------
+EXECUTION TIMING
+----------------------------------------------------------------------
+  universe: 0.0s
+  metrics: 39.8s
+  sentiment: 24.0s
+  predictions: 0.4s
+  portfolio: 0.0s
+  paper_trades: 0.0s
+  update_trades: 1.0s
+  TOTAL: 65.2s (1.1 min)
+
+======================================================================
+Report generated: 2026-01-20 18:28:59 UTC
+======================================================================

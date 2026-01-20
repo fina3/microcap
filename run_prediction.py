@@ -18,6 +18,7 @@ import numpy as np
 import pytz
 
 from models.predictor import MicroCapPredictor, PredictionResult
+from data.sector_analyzer import SectorAnalyzer
 
 logging.basicConfig(
     level=logging.INFO,
@@ -86,6 +87,19 @@ def parse_args():
         help='Run walk-forward validation'
     )
 
+    parser.add_argument(
+        '--universe',
+        type=str,
+        default=None,
+        help='Universe CSV file with sector data. Default: latest in data/raw'
+    )
+
+    parser.add_argument(
+        '--no-sector',
+        action='store_true',
+        help='Skip sector-relative metrics'
+    )
+
     return parser.parse_args()
 
 
@@ -135,6 +149,31 @@ def main():
     df = predictor.load_and_merge_data(metrics_file, sentiment_file)
 
     print(f"\nLoaded {len(df)} stocks")
+
+    # Add sector-relative metrics
+    sector_analyzer = None
+    if not args.no_sector:
+        try:
+            if args.universe:
+                universe_file = args.universe
+            else:
+                universe_file = find_latest_file('universe_*.csv')
+
+            print(f"\nAdding sector-relative metrics...")
+            print(f"  Universe file: {universe_file}")
+
+            sector_analyzer = SectorAnalyzer(universe_file=universe_file)
+            df = sector_analyzer.add_sectors_to_dataframe(df)
+            sector_analyzer.calculate_sector_stats(df)
+            df = sector_analyzer.add_sector_relative_metrics(df)
+
+            # Print sector summary
+            sector_analyzer.print_sector_summary()
+
+        except FileNotFoundError:
+            print("  No universe file found - skipping sector analysis")
+        except Exception as e:
+            logger.warning(f"Error in sector analysis: {e}")
 
     # Run walk-forward validation if requested
     if args.validate:
@@ -191,41 +230,107 @@ def main():
     # Sort by confidence
     predictions_sorted = sorted(predictions, key=lambda x: x.confidence, reverse=True)
 
-    print(f"\n{'Ticker':<8} {'Prediction':<14} {'Confidence':>10} {'Actual 52W':>12}")
-    print("-" * 50)
+    # For large datasets, show top 10 and bottom 10
+    show_all = len(predictions_sorted) <= 20
 
-    for pred in predictions_sorted:
+    # Build ticker to row mapping for sector context
+    ticker_data = {row['ticker']: row for _, row in df.iterrows()}
+
+    def format_sector_context(ticker):
+        """Format sector context string for a ticker."""
+        if sector_analyzer is None or ticker not in ticker_data:
+            return ""
+
+        row = ticker_data[ticker]
+        sector = row.get('sector', '')
+        if pd.isna(sector) or not sector:
+            return ""
+
+        pe = row.get('pe_trailing')
+        sector_pe = row.get('sector_pe_median')
+
+        if pd.notna(pe) and pd.notna(sector_pe) and sector_pe > 0:
+            pct_diff = ((pe - sector_pe) / sector_pe) * 100
+            if pct_diff < 0:
+                return f"P/E {pe:.1f} (sector: {sector_pe:.1f}) {abs(pct_diff):.0f}% discount"
+            else:
+                return f"P/E {pe:.1f} (sector: {sector_pe:.1f}) {pct_diff:.0f}% premium"
+        return ""
+
+    print(f"\n{'Ticker':<8} {'Prediction':<12} {'Conf':>6} {'52W':>8}  Sector Context")
+    print("-" * 80)
+
+    if show_all:
+        display_preds = predictions_sorted
+    else:
+        print("TOP 10 (highest confidence):")
+        display_preds = predictions_sorted[:10]
+
+    for pred in display_preds:
         actual_str = f"{pred.actual_return_52w:+.1f}%" if not np.isnan(pred.actual_return_52w) else "N/A"
+        sector_ctx = format_sector_context(pred.ticker)
         print(
             f"{pred.ticker:<8} "
-            f"{pred.predicted_direction:<14} "
-            f"{pred.confidence:>10.1%} "
-            f"{actual_str:>12}"
+            f"{pred.predicted_direction:<12} "
+            f"{pred.confidence:>5.0%} "
+            f"{actual_str:>8}  "
+            f"{sector_ctx}"
         )
+
+    if not show_all:
+        print(f"\n... {len(predictions_sorted) - 20} more predictions ...\n")
+        print("BOTTOM 10 (lowest confidence):")
+        print(f"{'Ticker':<8} {'Prediction':<12} {'Conf':>6} {'52W':>8}  Sector Context")
+        print("-" * 80)
+        for pred in predictions_sorted[-10:]:
+            actual_str = f"{pred.actual_return_52w:+.1f}%" if not np.isnan(pred.actual_return_52w) else "N/A"
+            sector_ctx = format_sector_context(pred.ticker)
+            print(
+                f"{pred.ticker:<8} "
+                f"{pred.predicted_direction:<12} "
+                f"{pred.confidence:>5.0%} "
+                f"{actual_str:>8}  "
+                f"{sector_ctx}"
+            )
 
     # Separate by prediction
     outperform = [p for p in predictions if p.prediction == 1]
     underperform = [p for p in predictions if p.prediction == 0]
 
     print(f"\nSummary:")
-    print(f"  Predicted to OUTPERFORM ({len(outperform)}): {', '.join(p.ticker for p in outperform)}")
-    print(f"  Predicted to UNDERPERFORM ({len(underperform)}): {', '.join(p.ticker for p in underperform)}")
+    print(f"  Total predictions: {len(predictions)}")
+    print(f"  Predicted OUTPERFORM: {len(outperform)}")
+    print(f"  Predicted UNDERPERFORM: {len(underperform)}")
 
-    # Save to CSV if requested
+    # Show top 5 highest confidence for each direction
+    outperform_sorted = sorted(outperform, key=lambda x: x.confidence, reverse=True)
+    underperform_sorted = sorted(underperform, key=lambda x: x.confidence, reverse=True)
+
+    if outperform_sorted:
+        top_out = [p.ticker for p in outperform_sorted[:5]]
+        print(f"\n  Top 5 OUTPERFORM picks: {', '.join(top_out)}")
+
+    if underperform_sorted:
+        top_under = [p.ticker for p in underperform_sorted[:5]]
+        print(f"  Top 5 UNDERPERFORM picks: {', '.join(top_under)}")
+
+    # Always save full results to CSV
+    date_str = datetime.now().strftime('%Y%m%d')
+
     if args.output:
-        output_df = pd.DataFrame([p.to_dict() for p in predictions])
-        output_df.to_csv(args.output, index=False)
-        logger.info(f"Predictions saved to: {args.output}")
+        output_file = args.output
     else:
-        # Default output
-        date_str = datetime.now().strftime('%Y%m%d')
         output_file = f'data/raw/predictions_{date_str}.csv'
-        output_df = pd.DataFrame([p.to_dict() for p in predictions])
-        output_df.to_csv(output_file, index=False)
-        logger.info(f"Predictions saved to: {output_file}")
+
+    # Create DataFrame sorted by confidence
+    output_df = pd.DataFrame([p.to_dict() for p in predictions_sorted])
+    output_df.to_csv(output_file, index=False)
 
     print("\n" + "="*70)
     print("PREDICTION COMPLETE")
+    print("="*70)
+    print(f"Total stocks analyzed: {len(predictions)}")
+    print(f"Full results saved to: {output_file}")
     print("="*70)
 
     return predictions

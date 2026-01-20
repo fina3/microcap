@@ -55,7 +55,8 @@ class FilingContent:
     metadata: FilingMetadata
     raw_html: str = ""
     extracted_text: str = ""
-    item_202_text: str = ""  # Item 2.02 specific content
+    item_202_text: str = ""  # Item 2.02 specific content (8-K)
+    mda_text: str = ""  # Management Discussion & Analysis (10-Q)
     text_length: int = 0
     extraction_quality: float = 1.0
     quality_notes: List[str] = field(default_factory=list)
@@ -357,6 +358,116 @@ class TranscriptFetcher:
 
         return filings
 
+    def find_10q_filings(
+        self,
+        ticker: str,
+        start_date: datetime,
+        end_date: datetime,
+        as_of_date: datetime
+    ) -> List[FilingMetadata]:
+        """
+        Find 10-Q quarterly report filings for a ticker within date range.
+
+        CRITICAL: Only returns filings with filing_date <= as_of_date
+        to prevent lookahead bias.
+
+        Args:
+            ticker: Stock ticker symbol
+            start_date: Start of date range (timezone-aware)
+            end_date: End of date range (timezone-aware)
+            as_of_date: Analysis date for temporal validation (timezone-aware)
+
+        Returns:
+            List of FilingMetadata for matching 10-Q filings
+        """
+        start_date = ensure_utc(start_date)
+        end_date = ensure_utc(end_date)
+        as_of_date = ensure_utc(as_of_date)
+
+        cik = self.get_cik_for_ticker(ticker)
+        if not cik:
+            logger.warning(f"{ticker}: No CIK found")
+            return []
+
+        # Fetch company submissions
+        submissions_url = SEC_SUBMISSIONS_URL.format(cik=cik)
+        response = self._make_request(submissions_url)
+
+        if response is None:
+            logger.error(f"{ticker}: Failed to fetch submissions")
+            return []
+
+        try:
+            data = response.json()
+        except ValueError as e:
+            logger.error(f"{ticker}: Invalid JSON response: {e}")
+            return []
+
+        filings = []
+        recent = data.get('filings', {}).get('recent', {})
+
+        # Get arrays from recent filings
+        forms = recent.get('form', [])
+        dates = recent.get('filingDate', [])
+        accessions = recent.get('accessionNumber', [])
+        primary_docs = recent.get('primaryDocument', [])
+
+        for i in range(len(forms)):
+            # Match 10-Q and 10-Q/A (amended)
+            if forms[i] not in ('10-Q', '10-Q/A'):
+                continue
+
+            try:
+                filing_date = datetime.strptime(dates[i], '%Y-%m-%d')
+                filing_date = ensure_utc(filing_date)
+            except (ValueError, IndexError):
+                continue
+
+            # Check date range
+            if filing_date < start_date or filing_date > end_date:
+                continue
+
+            # TEMPORAL VALIDATION: Only include if available as of as_of_date
+            if not validate_temporal_consistency(as_of_date, filing_date):
+                logger.debug(
+                    f"{ticker}: Skipping 10-Q from {filing_date.date()} - "
+                    f"not available as of {as_of_date.date()}"
+                )
+                continue
+
+            # Build file URL
+            accession = accessions[i]
+            accession_formatted = accession.replace('-', '')
+            primary_doc = primary_docs[i] if i < len(primary_docs) else ""
+            file_url = SEC_ARCHIVES_URL.format(
+                cik=cik.lstrip('0'),
+                accession=accession_formatted,
+                filename=primary_doc
+            )
+
+            filing = FilingMetadata(
+                ticker=ticker,
+                cik=cik,
+                accession_number=accession,
+                filing_date=filing_date,
+                form_type=forms[i],
+                items=[],  # 10-Q doesn't have items like 8-K
+                primary_document=primary_doc,
+                file_url=file_url
+            )
+            filings.append(filing)
+
+        logger.info(
+            f"{ticker}: Found {len(filings)} 10-Q filings "
+            f"from {start_date.date()} to {end_date.date()} "
+            f"available as of {as_of_date.date()}"
+        )
+
+        # Sort by date descending (most recent first)
+        filings.sort(key=lambda x: x.filing_date, reverse=True)
+
+        return filings
+
     def fetch_filing_content(
         self,
         filing: FilingMetadata,
@@ -538,3 +649,171 @@ class TranscriptFetcher:
         except Exception as e:
             logger.error(f"Error extracting Item 2.02: {e}")
             return ""
+
+    def extract_10q_mda_text(self, html: str) -> str:
+        """
+        Extract Management Discussion & Analysis (MD&A) section from 10-Q HTML.
+
+        MD&A is typically Item 2 in 10-Q and provides management's view on
+        financial condition, results of operations, and future outlook.
+
+        Args:
+            html: Raw HTML content of 10-Q filing
+
+        Returns:
+            Extracted MD&A text or empty string if not found
+        """
+        try:
+            soup = BeautifulSoup(html, 'lxml')
+            text = soup.get_text(separator='\n')
+
+            # Patterns to find MD&A section (Item 2 in 10-Q)
+            mda_start_patterns = [
+                r"(?i)item\s*2[\.\s]+management['']?s?\s+discussion\s+and\s+analysis",
+                r"(?i)ITEM\s*2[\.\s]+MANAGEMENT['']?S?\s+DISCUSSION\s+AND\s+ANALYSIS",
+                r"(?i)management['']?s?\s+discussion\s+and\s+analysis\s+of\s+financial\s+condition",
+                r"(?i)item\s*2\.\s*md\s*&\s*a",
+            ]
+
+            # Patterns for end of MD&A section (typically Item 3 or Item 4)
+            mda_end_patterns = [
+                r"(?i)item\s*3[\.\s]+quantitative\s+and\s+qualitative\s+disclosures",
+                r"(?i)item\s*4[\.\s]+controls\s+and\s+procedures",
+                r"(?i)ITEM\s*3\.",
+                r"(?i)ITEM\s*4\.",
+                r"(?i)part\s*ii[\.\s]+other\s+information",
+                r"(?i)PART\s*II",
+            ]
+
+            start_pos = None
+            for pattern in mda_start_patterns:
+                match = re.search(pattern, text)
+                if match:
+                    start_pos = match.start()
+                    break
+
+            if start_pos is None:
+                logger.debug("MD&A section start not found")
+                return ""
+
+            # Find end of MD&A section
+            remaining_text = text[start_pos:]
+            end_pos = len(remaining_text)
+
+            for pattern in mda_end_patterns:
+                # Search past the MD&A header (skip first 500 chars)
+                match = re.search(pattern, remaining_text[500:])
+                if match:
+                    end_pos = min(end_pos, match.start() + 500)
+                    break
+
+            section_text = remaining_text[:end_pos]
+
+            # Clean the text
+            section_text = re.sub(r'\s+', ' ', section_text)
+            section_text = section_text.strip()
+
+            # Remove common boilerplate
+            boilerplate_patterns = [
+                r'(?i)forward-looking statements?.*?(?:securities act|safe harbor|private securities)',
+                r'(?i)this (quarterly )?report.*?should be read.*?(?:annual report|10-k)',
+                r'(?i)table of contents',
+            ]
+
+            for pattern in boilerplate_patterns:
+                section_text = re.sub(pattern, '', section_text, flags=re.IGNORECASE | re.DOTALL)
+
+            # Limit to reasonable length (MD&A can be very long)
+            max_length = 50000  # ~10,000 words
+            if len(section_text) > max_length:
+                section_text = section_text[:max_length]
+                logger.info("MD&A text truncated to 50,000 chars")
+
+            return section_text.strip()
+
+        except Exception as e:
+            logger.error(f"Error extracting MD&A: {e}")
+            return ""
+
+    def fetch_10q_content(
+        self,
+        filing: FilingMetadata,
+        as_of_date: datetime
+    ) -> Optional[FilingContent]:
+        """
+        Fetch and parse 10-Q filing content, extracting MD&A section.
+
+        Args:
+            filing: FilingMetadata for the 10-Q filing to fetch
+            as_of_date: Analysis date for temporal validation
+
+        Returns:
+            FilingContent with MD&A text, or None if not available/fetchable
+        """
+        as_of_date = ensure_utc(as_of_date)
+
+        # Validate temporal consistency
+        if not validate_temporal_consistency(as_of_date, filing.filing_date):
+            logger.warning(
+                f"{filing.ticker}: 10-Q from {filing.filing_date.date()} "
+                f"not available as of {as_of_date.date()}"
+            )
+            return None
+
+        # Check cache
+        cache_key = f"{filing.ticker}_{filing.accession_number.replace('-', '')}_10q.html"
+        cache_path = self.cache_dir / cache_key
+
+        if cache_path.exists():
+            logger.debug(f"{filing.ticker}: Loading cached 10-Q filing")
+            try:
+                raw_html = cache_path.read_text(encoding='utf-8')
+            except IOError:
+                raw_html = None
+        else:
+            # Fetch from SEC
+            logger.info(f"{filing.ticker}: Fetching 10-Q filing from {filing.file_url}")
+            response = self._make_request(filing.file_url)
+
+            if response is None:
+                logger.error(f"{filing.ticker}: Failed to fetch 10-Q content")
+                return None
+
+            raw_html = response.text
+
+            # Cache the result
+            try:
+                cache_path.write_text(raw_html, encoding='utf-8')
+            except IOError as e:
+                logger.warning(f"Failed to cache 10-Q filing: {e}")
+
+        # Extract content
+        quality_notes = []
+
+        extracted_text = self._extract_text_from_html(raw_html)
+        mda_text = self.extract_10q_mda_text(raw_html)
+
+        if not mda_text:
+            quality_notes.append("MDA_NOT_FOUND")
+            # Fall back to full extracted text (truncated)
+            mda_text = extracted_text[:30000] if extracted_text else ""
+
+        if len(mda_text) < 500:
+            quality_notes.append("SHORT_MDA_TEXT")
+
+        extraction_quality = 1.0
+        if "MDA_NOT_FOUND" in quality_notes:
+            extraction_quality -= 0.3
+        if "SHORT_MDA_TEXT" in quality_notes:
+            extraction_quality -= 0.2
+
+        return FilingContent(
+            metadata=filing,
+            raw_html=raw_html,
+            extracted_text=extracted_text,
+            item_202_text="",  # Not applicable for 10-Q
+            mda_text=mda_text,
+            text_length=len(mda_text),
+            extraction_quality=max(0.0, extraction_quality),
+            quality_notes=quality_notes
+        )

@@ -10,7 +10,9 @@ sys.path.append('src')
 
 import argparse
 from datetime import datetime
+import glob as globlib
 import logging
+from typing import List, Optional
 
 import pandas as pd
 import pytz
@@ -31,10 +33,42 @@ DEFAULT_TICKERS = [
 ]
 
 
+def find_latest_universe_file(directory: str = 'data/raw') -> Optional[str]:
+    """Find the most recent universe CSV file."""
+    pattern = f'{directory}/universe_*.csv'
+    files = globlib.glob(pattern)
+
+    if not files:
+        return None
+
+    # Sort by filename (date is in filename YYYYMMDD)
+    files.sort(reverse=True)
+    return files[0]
+
+
+def load_universe_tickers(filepath: str) -> List[str]:
+    """Load tickers from universe CSV file."""
+    df = pd.read_csv(filepath)
+    return df['ticker'].tolist()
+
+
 def parse_args():
     """Parse command line arguments."""
     parser = argparse.ArgumentParser(
         description='Collect sentiment scores from SEC 8-K filings'
+    )
+
+    parser.add_argument(
+        '--universe',
+        action='store_true',
+        help='Use tickers from latest universe file (data/raw/universe_*.csv)'
+    )
+
+    parser.add_argument(
+        '--universe-file',
+        type=str,
+        default=None,
+        help='Specific universe CSV file to use'
     )
 
     parser.add_argument(
@@ -49,6 +83,13 @@ def parse_args():
         type=str,
         default=None,
         help='Comma-separated list of tickers. Default: predefined list'
+    )
+
+    parser.add_argument(
+        '--limit',
+        type=int,
+        default=None,
+        help='Limit to first N tickers (for testing)'
     )
 
     parser.add_argument(
@@ -103,15 +144,35 @@ def main():
     else:
         as_of_date = datetime.now(pytz.utc)
 
-    # Parse tickers
+    # Determine tickers to process
     if args.tickers:
         tickers = [t.strip().upper() for t in args.tickers.split(',')]
+        source = "command line"
+    elif args.universe or args.universe_file:
+        if args.universe_file:
+            universe_file = args.universe_file
+        else:
+            universe_file = find_latest_universe_file()
+
+        if universe_file is None:
+            logger.error("No universe file found. Run pull_universe.py first.")
+            sys.exit(1)
+
+        tickers = load_universe_tickers(universe_file)
+        source = universe_file
     else:
         tickers = DEFAULT_TICKERS
+        source = "default list"
+
+    # Apply limit if specified
+    if args.limit and args.limit > 0:
+        tickers = tickers[:args.limit]
+        print(f"Limited to first {args.limit} tickers")
 
     print(f"\nConfiguration:")
+    print(f"  Source: {source}")
+    print(f"  Tickers to process: {len(tickers)}")
     print(f"  As-of date: {as_of_date.date()}")
-    print(f"  Tickers: {', '.join(tickers)}")
     print(f"  Lookback: {args.lookback_days} days")
     print(f"  Output: {args.output_dir}")
     print("="*70)
@@ -125,7 +186,8 @@ def main():
     # Collect sentiment for all tickers
     df = collector.collect_all_tickers(
         tickers=tickers,
-        lookback_days=args.lookback_days
+        lookback_days=args.lookback_days,
+        show_progress=True
     )
 
     # Print summary
