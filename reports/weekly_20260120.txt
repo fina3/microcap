@@ -3,58 +3,71 @@ MICRO-CAP WEEKLY ANALYSIS - 2026-01-20
 ======================================================================
 
 Universe: 529 stocks screened
-Analyzed: 15 stocks with valid metrics
+Analyzed: 50 stocks with valid metrics
 
 ----------------------------------------------------------------------
 TOP RECOMMENDATIONS
 ----------------------------------------------------------------------
- 1. AENT   - OUTPERFORM (64%) - Buy $494 (64 shares @ $7.71) [Communication Services]
-     Stop: $6.56 | Target: $10.03
- 2. ABOS   - OUTPERFORM (62%) - Buy $499 (267 shares @ $1.87) [Healthcare]
-     Stop: $1.59 | Target: $2.43
- 3. ACRS   - OUTPERFORM (61%) - Buy $498 (122 shares @ $4.08) [Healthcare]
-     Stop: $3.47 | Target: $5.31
+ 1. APYX   - OUTPERFORM (85%) - Buy $1,000 (259 shares @ $3.86) [Healthcare]
+     Stop: $3.28 | Target: $5.02
+ 2. ALTO   - OUTPERFORM (80%) - Buy $1,000 (369 shares @ $2.71) [Basic Materials]
+     Stop: $2.30 | Target: $3.52
+ 3. AP     - OUTPERFORM (79%) - Buy $995 (181 shares @ $5.50) [Industrials]
+     Stop: $4.67 | Target: $7.14
+ 4. ACRS   - OUTPERFORM (77%) - Buy $996 (240 shares @ $4.15) [Healthcare]
+     Stop: $3.53 | Target: $5.40
+ 5. ACNT   - OUTPERFORM (77%) - Buy $994 (61 shares @ $16.30) [Basic Materials]
+     Stop: $13.86 | Target: $21.19
+ 6. AMPG   - OUTPERFORM (74%) - Buy $997 (271 shares @ $3.68) [Technology]
+     Stop: $3.13 | Target: $4.78
+ 7. AENT   - OUTPERFORM (70%) - Buy $994 (130 shares @ $7.65) [Communication Services]
+     Stop: $6.50 | Target: $9.94
+ 8. ALMU   - OUTPERFORM (66%) - Buy $484 (23 shares @ $21.03) [Technology]
+     Stop: $17.88 | Target: $27.34
 
 ----------------------------------------------------------------------
 PAPER TRADING PERFORMANCE
 ----------------------------------------------------------------------
-Total positions tracked: 8
-Active positions: 8
+Total positions tracked: 14
+Active positions: 14
 Completed trades: 0
-Current unrealized return: -0.4%
+Current unrealized return: -0.0%
 
 ----------------------------------------------------------------------
 SECTOR BREAKDOWN
 ----------------------------------------------------------------------
   Healthcare: 2 positions
+  Basic Materials: 2 positions
+  Technology: 2 positions
+  Industrials: 1 position
   Communication Services: 1 position
 
 ----------------------------------------------------------------------
 TOP PREDICTIVE FEATURES
 ----------------------------------------------------------------------
-   1. momentum: 0.2130
-   2. pb_ratio: 0.1017
-   3. debt_to_equity: 0.1013
-   4. short_interest: 0.0909
-   5. pb_vs_sector: 0.0617
-   6. sector_value_score: 0.0479
-   7. sentiment: 0.0402
-   8. value_score: 0.0402
-   9. uncertainty: 0.0393
-  10. accruals_ratio: 0.0371
+   1. momentum: 0.3492
+   2. short_interest: 0.0982
+   3. earnings_surprise: 0.0721
+   4. pb_vs_sector: 0.0620
+   5. pe_ratio: 0.0568
+   6. pb_ratio: 0.0556
+   7. debt_to_equity: 0.0330
+   8. revenue_growth: 0.0259
+   9. accruals_ratio: 0.0243
+  10. gross_margin: 0.0227
 
 ----------------------------------------------------------------------
 EXECUTION TIMING
 ----------------------------------------------------------------------
   universe: 0.0s
-  metrics: 39.8s
-  sentiment: 24.0s
-  predictions: 0.4s
+  metrics: 124.9s
+  sentiment: 71.2s
+  predictions: 0.3s
   portfolio: 0.0s
   paper_trades: 0.0s
-  update_trades: 1.0s
-  TOTAL: 65.2s (1.1 min)
+  update_trades: 1.7s
+  TOTAL: 198.1s (3.3 min)
 
 ======================================================================
-Report generated: 2026-01-20 18:28:59 UTC
+Report generated: 2026-01-20 18:44:15 UTC
 ======================================================================
