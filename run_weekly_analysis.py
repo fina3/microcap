@@ -40,6 +40,7 @@ from data.universe_screener import UniverseScreener
 from data.sentiment_collector import SentimentCollector
 from data.sector_analyzer import SectorAnalyzer
 from data.liquidity_checker import check_liquidity_batch, get_liquidity_summary
+from screening.options_screener import screen_options_batch, get_options_summary
 from models.predictor import MicroCapPredictor
 from portfolio.risk_manager import RiskManager
 from tracking.paper_trader import PaperTrader
@@ -82,6 +83,8 @@ class WeeklyAnalyzer:
         self.predictions = None
         self.liquidity_data = {}  # ticker -> {liquidity_grade, spread_pct}
         self.liquidity_summary = None
+        self.options_data = {}  # ticker -> OptionsCandidate
+        self.options_candidates = []  # tickers with liquid options
         self.portfolio = None
         self.paper_trades_summary = None
 
@@ -436,6 +439,29 @@ class WeeklyAnalyzer:
             output_df.to_csv(output_file, index=False)
             print(f"\n  Liquidity data saved: {output_file}")
 
+        # Screen top-20 for options availability
+        print(f"\n  Screening top 20 for options availability...")
+        top20_tickers = [p.ticker for p in sorted(self.predictions, key=lambda x: x.rank)[:20]]
+
+        if not self.dry_run:
+            options_results = screen_options_batch(top20_tickers)
+
+            for opt in options_results:
+                self.options_data[opt.ticker] = opt
+                if opt.options_available:
+                    self.options_candidates.append(opt.ticker)
+
+            if self.options_candidates:
+                print(f"  Options available: {', '.join(self.options_candidates)}")
+
+                # Save options data
+                options_df = pd.DataFrame([r.to_dict() for r in options_results])
+                options_file = Path("data/options_candidates.csv")
+                options_df.to_csv(options_file, index=False)
+                print(f"  Options data saved: {options_file}")
+            else:
+                print("  No top-20 picks have liquid options (expected for micro-caps)")
+
         self.step_times['liquidity'] = time.time() - start_time
         return True
 
@@ -609,11 +635,32 @@ class WeeklyAnalyzer:
         if self.predictions:
             predictions_sorted = sorted(self.predictions, key=lambda x: x.rank)
             for pred in predictions_sorted[:20]:
+                # Check if options available
+                options_flag = ""
+                if pred.ticker in self.options_candidates:
+                    options_flag = " [OPTIONS]"
                 report_lines.append(
-                    f"Rank {pred.rank:3}: {pred.ticker:<6} ({pred.confidence:.1%} confidence)"
+                    f"Rank {pred.rank:3}: {pred.ticker:<6} ({pred.confidence:.1%} confidence){options_flag}"
                 )
 
         report_lines.append("")
+
+        # Options candidates
+        if self.options_candidates:
+            report_lines.append("-" * 70)
+            report_lines.append("OPTIONS CANDIDATES")
+            report_lines.append("-" * 70)
+            report_lines.append(f"Top-20 picks with liquid options: {len(self.options_candidates)}")
+            for ticker in self.options_candidates:
+                opt = self.options_data.get(ticker)
+                if opt:
+                    report_lines.append(
+                        f"  {ticker}: ${opt.nearest_strike} strike, "
+                        f"${opt.call_premium:.2f} premium, "
+                        f"OI={opt.open_interest}, "
+                        f"exp {opt.expiry}"
+                    )
+            report_lines.append("")
 
         # Portfolio recommendations
         report_lines.append("-" * 70)

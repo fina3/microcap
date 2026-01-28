@@ -14,12 +14,14 @@ Generates comprehensive performance report for the 9-week forward test:
 import sys
 sys.path.insert(0, 'src')
 
+import os
 from datetime import datetime
 from pathlib import Path
 import pandas as pd
 import pytz
 
 from tracking.forward_test import ForwardTestTracker, FORWARD_TEST_WEEKS
+from screening.options_screener import screen_options_batch, get_options_summary
 
 
 def print_header(title: str, char: str = "="):
@@ -184,11 +186,85 @@ def main():
         status = "PASSING" if stats['overall_accuracy'] >= 0.5 else "FAILING"
         print(f"  Overall accuracy:        {format_pct(stats['overall_accuracy'])} [{status}]")
 
+    # Options Candidates Section
+    print_options_candidates()
+
     print()
     print("=" * 70)
     print(f" Report generated: {datetime.now(pytz.utc).strftime('%Y-%m-%d %H:%M:%S UTC')}")
     print("=" * 70)
     print()
+
+
+def print_options_candidates():
+    """Print options candidates from top-20 predictions."""
+    print_header("OPTIONS CANDIDATES")
+
+    # Load top-20 predictions
+    try:
+        data_path = Path('data/raw')
+        pred_files = list(data_path.glob('predictions_*.csv'))
+        if not pred_files:
+            print("  No predictions file found")
+            return
+
+        latest_pred = max(pred_files, key=lambda x: x.stat().st_mtime)
+        pred_df = pd.read_csv(latest_pred)
+
+        if 'rank' in pred_df.columns:
+            top20 = pred_df.sort_values('rank').head(20)
+        else:
+            top20 = pred_df.sort_values('confidence', ascending=False).head(20)
+
+        tickers = top20['ticker'].tolist()
+    except Exception as e:
+        print(f"  Error loading predictions: {e}")
+        return
+
+    print(f"  Screening top 20 predictions for options availability...")
+
+    # Screen for options
+    results = screen_options_batch(tickers)
+    summary = get_options_summary(results)
+
+    # Get candidates
+    candidates = [r for r in results if r.options_available]
+
+    print(f"\n  Screened: {summary['total_screened']} tickers")
+    print(f"  Have options: {summary['has_options']}")
+    print(f"  Liquid options: {summary['liquid_options']}")
+
+    if candidates:
+        print(f"\n  {'Ticker':<8} {'Rank':>5} {'Conf':>7} {'Strike':>8} {'Premium':>8} {'OI':>8} {'IV':>7}")
+        print(f"  {'-'*8} {'-'*5} {'-'*7} {'-'*8} {'-'*8} {'-'*8} {'-'*7}")
+
+        # Get rank and confidence for each candidate
+        for c in candidates:
+            ticker_row = top20[top20['ticker'] == c.ticker]
+            if not ticker_row.empty:
+                rank = int(ticker_row.iloc[0].get('rank', 0))
+                conf = ticker_row.iloc[0].get('confidence', 0) * 100
+            else:
+                rank = 0
+                conf = 0
+
+            iv_str = f"{c.implied_vol:.0f}%" if c.implied_vol else "N/A"
+            premium_str = f"${c.call_premium:.2f}" if c.call_premium else "N/A"
+
+            print(
+                f"  {c.ticker:<8} "
+                f"{rank:>5} "
+                f"{conf:>6.1f}% "
+                f"${c.nearest_strike:>6.2f} "
+                f"{premium_str:>8} "
+                f"{c.open_interest:>8} "
+                f"{iv_str:>7}"
+            )
+
+        print(f"\n  Expiry dates: {', '.join(set(c.expiry for c in candidates if c.expiry))}")
+    else:
+        print("\n  No top-20 picks have liquid options.")
+        print("  (This is expected for most micro-caps)")
 
 
 if __name__ == "__main__":
