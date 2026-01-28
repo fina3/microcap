@@ -75,6 +75,53 @@ def get_current_price(ticker: str) -> float | None:
     return None
 
 
+def get_iwc_benchmark_data() -> dict | None:
+    """
+    Fetch IWC (iShares Micro-Cap ETF) data for benchmarking.
+
+    Returns dict with:
+        - current_price: Latest closing price
+        - week_ago_price: Price from 7 days ago
+        - weekly_change_pct: Percent change over the week
+        - month_ago_price: Price from 30 days ago
+        - monthly_change_pct: Percent change over the month
+    """
+    if not HAS_YFINANCE:
+        return None
+
+    try:
+        iwc = yf.Ticker("IWC")
+        # Get 35 days of history to ensure we have enough data
+        hist = iwc.history(period="35d")
+
+        if hist.empty or len(hist) < 2:
+            return None
+
+        current_price = hist['Close'].iloc[-1]
+
+        # Find price from ~7 days ago
+        week_ago_idx = max(0, len(hist) - 6)  # Approximately 5 trading days
+        week_ago_price = hist['Close'].iloc[week_ago_idx]
+        weekly_change_pct = ((current_price - week_ago_price) / week_ago_price) * 100
+
+        # Find price from ~30 days ago
+        month_ago_idx = 0  # Start of our 35-day window
+        month_ago_price = hist['Close'].iloc[month_ago_idx]
+        monthly_change_pct = ((current_price - month_ago_price) / month_ago_price) * 100
+
+        return {
+            'current_price': current_price,
+            'week_ago_price': week_ago_price,
+            'weekly_change_pct': weekly_change_pct,
+            'month_ago_price': month_ago_price,
+            'monthly_change_pct': monthly_change_pct
+        }
+
+    except Exception as e:
+        print(f"  Warning: Could not fetch IWC data: {e}")
+        return None
+
+
 def print_section(title: str):
     """Print a section header."""
     print()
@@ -337,6 +384,94 @@ def print_paper_trading_status():
             print(f"  Win rate (completed): {win_rate:.1f}% ({winners}/{len(completed_df)})")
 
 
+def print_benchmark_comparison():
+    """Print portfolio performance vs IWC benchmark."""
+    print_section("PERFORMANCE VS BENCHMARK (IWC)")
+
+    if not HAS_YFINANCE:
+        print("  yfinance not available - cannot fetch benchmark data")
+        return
+
+    # Get IWC benchmark data
+    iwc_data = get_iwc_benchmark_data()
+    if not iwc_data:
+        print("  Could not fetch IWC benchmark data")
+        return
+
+    # Calculate portfolio performance from paper trades
+    trades_file = "data/tracking/paper_trades.csv"
+    portfolio_weekly_return = None
+    portfolio_total_return = None
+
+    if os.path.exists(trades_file):
+        df = load_csv_safe(trades_file)
+        if df is not None and not df.empty:
+            now = datetime.now(pytz.UTC)
+
+            # Get active trades only
+            def is_active(row):
+                if pd.notna(row.get('is_completed')) and row['is_completed']:
+                    return False
+                try:
+                    target = pd.to_datetime(row['target_date'])
+                    if target.tzinfo is None:
+                        target = target.tz_localize('UTC')
+                    return now < target
+                except Exception:
+                    return True
+
+            active_df = df[df.apply(is_active, axis=1)]
+
+            if not active_df.empty:
+                # Calculate returns for each active position
+                returns = []
+                for _, row in active_df.iterrows():
+                    entry_price = row['entry_price']
+                    current_price = get_current_price(row['ticker'])
+                    if current_price is None:
+                        current_price = row.get('current_price', entry_price)
+
+                    if entry_price and entry_price > 0:
+                        ret = ((current_price - entry_price) / entry_price) * 100
+                        returns.append(ret)
+
+                if returns:
+                    portfolio_total_return = sum(returns) / len(returns)
+
+    # Display comparison
+    print(f"\n  {'Metric':<25} {'Portfolio':>12} {'IWC':>12} {'Alpha':>12}")
+    print(f"  {'-'*25} {'-'*12} {'-'*12} {'-'*12}")
+
+    # Weekly change
+    iwc_weekly = iwc_data['weekly_change_pct']
+    print(f"  {'Weekly Change':<25} {'N/A':>12} {iwc_weekly:>+11.2f}% {'-':>12}")
+
+    # Monthly change
+    iwc_monthly = iwc_data['monthly_change_pct']
+    print(f"  {'Monthly Change':<25} {'N/A':>12} {iwc_monthly:>+11.2f}% {'-':>12}")
+
+    # Portfolio return (since entry)
+    if portfolio_total_return is not None:
+        alpha = portfolio_total_return - iwc_monthly
+        alpha_str = f"{alpha:>+11.2f}%"
+        port_str = f"{portfolio_total_return:>+11.2f}%"
+        print(f"  {'Portfolio Return (avg)':<25} {port_str} {iwc_monthly:>+11.2f}% {alpha_str}")
+    else:
+        print(f"  {'Portfolio Return (avg)':<25} {'N/A':>12} {iwc_monthly:>+11.2f}% {'-':>12}")
+
+    # IWC current price
+    print(f"\n  IWC Current Price: ${iwc_data['current_price']:.2f}")
+
+    # Performance indicator
+    if portfolio_total_return is not None:
+        if portfolio_total_return > iwc_monthly:
+            print(f"  Status: OUTPERFORMING benchmark by {portfolio_total_return - iwc_monthly:+.2f}%")
+        elif portfolio_total_return < iwc_monthly:
+            print(f"  Status: UNDERPERFORMING benchmark by {iwc_monthly - portfolio_total_return:.2f}%")
+        else:
+            print(f"  Status: MATCHING benchmark")
+
+
 def print_alerts():
     """Print alerts section."""
     print_section("ALERTS")
@@ -459,6 +594,7 @@ def main():
     print_data_status()
     print_top_picks()
     print_paper_trading_status()
+    print_benchmark_comparison()
     print_alerts()
     print_quick_actions()
 
