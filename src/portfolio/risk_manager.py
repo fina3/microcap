@@ -34,6 +34,7 @@ class PositionRecommendation:
     stop_loss: float
     take_profit: float
     sector: Optional[str] = None
+    liquidity_grade: str = "?"
     notes: str = ""
 
     def to_dict(self) -> Dict:
@@ -49,6 +50,7 @@ class PositionRecommendation:
             'stop_loss': self.stop_loss,
             'take_profit': self.take_profit,
             'sector': self.sector,
+            'liquidity_grade': self.liquidity_grade,
             'notes': self.notes
         }
 
@@ -318,7 +320,8 @@ class RiskManager:
         self,
         predictions: List[Dict],
         portfolio_value: float,
-        min_confidence: float = 0.50
+        min_confidence: float = 0.50,
+        liquidity_data: Optional[Dict[str, Dict]] = None
     ) -> List[PositionRecommendation]:
         """
         Build a portfolio from predictions.
@@ -329,6 +332,7 @@ class RiskManager:
                 - sector (optional)
             portfolio_value: Total capital available
             min_confidence: Minimum confidence to include
+            liquidity_data: Optional dict mapping ticker -> {'liquidity_grade': 'A', 'spread_pct': 1.5}
 
         Returns:
             List of PositionRecommendation objects
@@ -336,6 +340,8 @@ class RiskManager:
         logger.info(f"Building portfolio from {len(predictions)} predictions")
         logger.info(f"Portfolio value: ${portfolio_value:,.2f}")
         logger.info(f"Min confidence: {min_confidence:.0%}")
+
+        liquidity_data = liquidity_data or {}
 
         # Filter by confidence and sort by confidence (highest first)
         filtered = [
@@ -353,6 +359,8 @@ class RiskManager:
 
         recommendations = []
         current_positions = []
+        excluded_illiquid = 0
+        reduced_positions = 0
 
         for pred in sorted_predictions:
             ticker = pred.get('ticker')
@@ -364,11 +372,28 @@ class RiskManager:
                 logger.warning(f"{ticker}: Invalid price ({price}), skipping")
                 continue
 
+            # Check liquidity grade
+            liq_info = liquidity_data.get(ticker, {})
+            liquidity_grade = liq_info.get('liquidity_grade', '?')
+
+            # Exclude F-grade stocks (too illiquid to trade)
+            if liquidity_grade == 'F':
+                logger.info(f"{ticker}: Skipped - liquidity grade F (DO NOT TRADE)")
+                excluded_illiquid += 1
+                continue
+
             # Calculate position size
             dollar_amount, position_pct = self.calculate_position_size(
                 confidence=confidence,
                 portfolio_value=portfolio_value
             )
+
+            # Reduce position size by 50% for D-grade stocks
+            if liquidity_grade == 'D':
+                dollar_amount *= 0.5
+                position_pct *= 0.5
+                reduced_positions += 1
+                logger.info(f"{ticker}: Position reduced 50% due to poor liquidity (grade D)")
 
             # Check portfolio limits
             new_position = {
@@ -399,6 +424,11 @@ class RiskManager:
             stop_loss = self.calculate_stop_loss(price)
             take_profit = self.calculate_take_profit(price)
 
+            # Build notes
+            notes_list = limit_check.warnings if limit_check.warnings else []
+            if liquidity_grade == 'D':
+                notes_list.append("Position reduced 50% (poor liquidity)")
+
             # Create recommendation
             rec = PositionRecommendation(
                 ticker=ticker,
@@ -411,7 +441,8 @@ class RiskManager:
                 stop_loss=stop_loss,
                 take_profit=take_profit,
                 sector=sector,
-                notes='; '.join(limit_check.warnings) if limit_check.warnings else ''
+                liquidity_grade=liquidity_grade,
+                notes='; '.join(notes_list) if notes_list else ''
             )
 
             recommendations.append(rec)
@@ -419,7 +450,7 @@ class RiskManager:
 
             logger.info(
                 f"{ticker}: {shares} shares @ ${price:.2f} = ${actual_amount:,.2f} "
-                f"({rec.position_pct:.0%} of portfolio)"
+                f"({rec.position_pct:.0%} of portfolio) [Liq: {liquidity_grade}]"
             )
 
         # Summary
@@ -429,6 +460,10 @@ class RiskManager:
         logger.info(f"\nPortfolio built: {len(recommendations)} positions")
         logger.info(f"Total allocated: ${total_allocated:,.2f} ({total_allocated/portfolio_value:.0%})")
         logger.info(f"Cash remaining: ${cash_remaining:,.2f} ({cash_remaining/portfolio_value:.0%})")
+        if excluded_illiquid > 0:
+            logger.info(f"Excluded for illiquidity (grade F): {excluded_illiquid}")
+        if reduced_positions > 0:
+            logger.info(f"Positions reduced 50% (grade D): {reduced_positions}")
 
         return recommendations
 

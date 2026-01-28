@@ -1,0 +1,78 @@
+
+============================================================
+ WEDNESDAY MID-WEEK REPORT
+ 2026-01-28 22:34
+============================================================
+
+------------------------------------------------------------
+ FORWARD TEST STATUS
+------------------------------------------------------------
+  Week 1 of 9 | 8 weeks remaining
+
+------------------------------------------------------------
+ BIG MOVERS (>10% since Monday)
+------------------------------------------------------------
+  Ticker    Rank   Monday  Current   Change
+  -------- ----- -------- -------- --------
+  AGL          7 $  0.95 $  0.82   -13.5% DOWN
+  ATOS        45 $  0.69 $  0.62   -10.7% DOWN
+
+------------------------------------------------------------
+ RANK MOVEMENTS (Top 20)
+------------------------------------------------------------
+  Need at least 2 weeks of data for rank comparison
+
+------------------------------------------------------------
+ ALERTS
+------------------------------------------------------------
+  TAKE PROFIT HIT: ABOS at +50.3%
+  WARNING: ACRS at -14.1% - approaching stop
+  WARNING: AMPG at -10.1% - approaching stop
+  STOP LOSS HIT: ALMU at -18.4%
+  STOP LOSS HIT: CALC at -76.1%
+  LIQUIDITY: CAL has poor liquidity (grade D)
+  LIQUIDITY: AVD has poor liquidity (grade F)
+  LIQUIDITY: CATO has poor liquidity (grade F)
+  LIQUIDITY: CLW has poor liquidity (grade F)
+  LIQUIDITY: AMCX has poor liquidity (grade F)
+  LIQUIDITY: ACCO has poor liquidity (grade D)
+  LIQUIDITY: BNED has poor liquidity (grade F)
+  LIQUIDITY: ASIX has poor liquidity (grade F)
+  LIQUIDITY: ACH has poor liquidity (grade D)
+  LIQUIDITY: AMPY has poor liquidity (grade D)
+  LIQUIDITY: BEEP has poor liquidity (grade F)
+  LIQUIDITY: BOC has poor liquidity (grade F)
+  LIQUIDITY: AOUT has poor liquidity (grade D)
+  LIQUIDITY: ANIK has poor liquidity (grade F)
+
+------------------------------------------------------------
+ LIQUIDITY CHECK (Top 20)
+------------------------------------------------------------
+  Grade distribution:
+    A: 2 stocks
+    B: 2 stocks
+    C: 2 stocks
+    D: 5 stocks (CAUTION)
+    F: 9 stocks (CAUTION)
+
+  Average spread: 12.91%
+
+------------------------------------------------------------
+ PAPER TRADING STATUS
+------------------------------------------------------------
+  Active positions: 34
+  Completed trades: 0
+  Unrealized avg return: -2.8%
+
+------------------------------------------------------------
+ NEXT STEPS
+------------------------------------------------------------
+  Saturday: Run full weekly analysis
+    python run_weekly_analysis.py --limit 150
+    python forward_test_report.py
+    python dashboard.py
+
+============================================================
+ Time to complete: ~2-3 minutes
+ Next check: Saturday (full analysis)
+============================================================

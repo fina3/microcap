@@ -222,16 +222,13 @@ def main():
             break
         print(f"  {i+1}. {feature}: {importance:.4f}")
 
-    # Predictions ranked by confidence
+    # Predictions sorted by strict rank (1 = best)
     print("\n" + "-"*70)
-    print("PREDICTIONS (ranked by confidence)")
+    print("RANKED PREDICTIONS (strict ordering 1 to N)")
     print("-"*70)
 
-    # Sort by confidence
-    predictions_sorted = sorted(predictions, key=lambda x: x.confidence, reverse=True)
-
-    # For large datasets, show top 10 and bottom 10
-    show_all = len(predictions_sorted) <= 20
+    # Predictions are already sorted by rank from generate_predictions()
+    predictions_sorted = sorted(predictions, key=lambda x: x.rank)
 
     # Build ticker to row mapping for sector context
     ticker_data = {row['ticker']: row for _, row in df.iterrows()}
@@ -252,67 +249,32 @@ def main():
         if pd.notna(pe) and pd.notna(sector_pe) and sector_pe > 0:
             pct_diff = ((pe - sector_pe) / sector_pe) * 100
             if pct_diff < 0:
-                return f"P/E {pe:.1f} (sector: {sector_pe:.1f}) {abs(pct_diff):.0f}% discount"
+                return f"P/E {pe:.1f} ({abs(pct_diff):.0f}% discount)"
             else:
-                return f"P/E {pe:.1f} (sector: {sector_pe:.1f}) {pct_diff:.0f}% premium"
+                return f"P/E {pe:.1f} ({pct_diff:.0f}% premium)"
         return ""
 
-    print(f"\n{'Ticker':<8} {'Prediction':<12} {'Conf':>6} {'52W':>8}  Sector Context")
-    print("-" * 80)
+    # Always show top 20 with rank numbers
+    print(f"\n{'Rank':<6} {'Ticker':<8} {'Conf':>7} {'52W':>8}  Context")
+    print("-" * 70)
 
-    if show_all:
-        display_preds = predictions_sorted
-    else:
-        print("TOP 10 (highest confidence):")
-        display_preds = predictions_sorted[:10]
-
-    for pred in display_preds:
+    for pred in predictions_sorted[:20]:
         actual_str = f"{pred.actual_return_52w:+.1f}%" if not np.isnan(pred.actual_return_52w) else "N/A"
         sector_ctx = format_sector_context(pred.ticker)
         print(
+            f"Rank {pred.rank:<3} "
             f"{pred.ticker:<8} "
-            f"{pred.predicted_direction:<12} "
-            f"{pred.confidence:>5.0%} "
+            f"{pred.confidence:>6.1%} "
             f"{actual_str:>8}  "
             f"{sector_ctx}"
         )
 
-    if not show_all:
-        print(f"\n... {len(predictions_sorted) - 20} more predictions ...\n")
-        print("BOTTOM 10 (lowest confidence):")
-        print(f"{'Ticker':<8} {'Prediction':<12} {'Conf':>6} {'52W':>8}  Sector Context")
-        print("-" * 80)
-        for pred in predictions_sorted[-10:]:
-            actual_str = f"{pred.actual_return_52w:+.1f}%" if not np.isnan(pred.actual_return_52w) else "N/A"
-            sector_ctx = format_sector_context(pred.ticker)
-            print(
-                f"{pred.ticker:<8} "
-                f"{pred.predicted_direction:<12} "
-                f"{pred.confidence:>5.0%} "
-                f"{actual_str:>8}  "
-                f"{sector_ctx}"
-            )
-
-    # Separate by prediction
-    outperform = [p for p in predictions if p.prediction == 1]
-    underperform = [p for p in predictions if p.prediction == 0]
+    if len(predictions_sorted) > 20:
+        print(f"\n... {len(predictions_sorted) - 20} more ranked stocks ...")
 
     print(f"\nSummary:")
-    print(f"  Total predictions: {len(predictions)}")
-    print(f"  Predicted OUTPERFORM: {len(outperform)}")
-    print(f"  Predicted UNDERPERFORM: {len(underperform)}")
-
-    # Show top 5 highest confidence for each direction
-    outperform_sorted = sorted(outperform, key=lambda x: x.confidence, reverse=True)
-    underperform_sorted = sorted(underperform, key=lambda x: x.confidence, reverse=True)
-
-    if outperform_sorted:
-        top_out = [p.ticker for p in outperform_sorted[:5]]
-        print(f"\n  Top 5 OUTPERFORM picks: {', '.join(top_out)}")
-
-    if underperform_sorted:
-        top_under = [p.ticker for p in underperform_sorted[:5]]
-        print(f"  Top 5 UNDERPERFORM picks: {', '.join(top_under)}")
+    print(f"  Total ranked: {len(predictions)}")
+    print(f"  Rank range: 1 to {len(predictions)}")
 
     # Always save full results to CSV
     date_str = datetime.now().strftime('%Y%m%d')

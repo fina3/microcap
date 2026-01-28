@@ -1,0 +1,120 @@
+======================================================================
+MICRO-CAP WEEKLY ANALYSIS - 2026-01-28
+======================================================================
+
+Universe: 523 stocks screened
+Analyzed: 150 stocks with valid metrics
+
+----------------------------------------------------------------------
+TOP 20 RANKED STOCKS
+----------------------------------------------------------------------
+Rank   1: ADV    (96.3% confidence)
+Rank   2: CAL    (95.6% confidence)
+Rank   3: BOOM   (95.6% confidence)
+Rank   4: AVD    (95.6% confidence)
+Rank   5: CATO   (95.6% confidence)
+Rank   6: CLW    (95.4% confidence)
+Rank   7: AGL    (95.2% confidence)
+Rank   8: AMCX   (95.2% confidence)
+Rank   9: ACCO   (95.0% confidence)
+Rank  10: COOK   (95.0% confidence)
+Rank  11: BNED   (94.9% confidence)
+Rank  12: ASIX   (94.8% confidence)
+Rank  13: ACH    (94.8% confidence)
+Rank  14: CLAR   (94.7% confidence)
+Rank  15: AMPY   (94.5% confidence)
+Rank  16: BGS    (94.2% confidence)
+Rank  17: BEEP   (93.9% confidence)
+Rank  18: BOC    (93.6% confidence)
+Rank  19: AOUT   (93.5% confidence)
+Rank  20: ANIK   (93.5% confidence)
+
+----------------------------------------------------------------------
+PORTFOLIO RECOMMENDATIONS
+----------------------------------------------------------------------
+ 1. CODA   - Buy $496 (50 shares @ $9.91) [Industrials]
+     Stop: $8.42 | Target: $12.88
+ 2. AVTX   - Buy $988 (66 shares @ $14.97) [Healthcare]
+     Stop: $12.72 | Target: $19.46
+ 3. CNTX   - Buy $998 (416 shares @ $2.40) [Healthcare]
+     Stop: $2.04 | Target: $3.12
+ 4. APYX   - Buy $998 (249 shares @ $4.01) [Healthcare]
+     Stop: $3.41 | Target: $5.21
+ 5. BLBX   - Buy $492 (38 shares @ $12.94) [Technology]
+     Stop: $11.00 | Target: $16.82
+ 6. BUDA   - Buy $494 (49 shares @ $10.09) [Consumer Defensive]
+     Stop: $8.58 | Target: $13.12
+ 7. ASYS   - Buy $987 (54 shares @ $18.28) [Technology]
+     Stop: $15.54 | Target: $23.76
+ 8. BODI   - Buy $495 (43 shares @ $11.52) [Communication Services]
+     Stop: $9.79 | Target: $14.98
+ 9. AREN   - Buy $499 (130 shares @ $3.84) [Communication Services]
+     Stop: $3.26 | Target: $4.99
+10. AREC   - Buy $499 (125 shares @ $3.99) [Basic Materials]
+     Stop: $3.39 | Target: $5.19
+
+----------------------------------------------------------------------
+PAPER TRADING PERFORMANCE
+----------------------------------------------------------------------
+Total positions tracked: 38
+Active positions: 38
+Completed trades: 0
+Current unrealized return: -2.5%
+
+----------------------------------------------------------------------
+SECTOR BREAKDOWN
+----------------------------------------------------------------------
+  Healthcare: 3 positions
+  Technology: 2 positions
+  Communication Services: 2 positions
+  Industrials: 1 position
+  Consumer Defensive: 1 position
+  Basic Materials: 1 position
+
+----------------------------------------------------------------------
+LIQUIDITY SUMMARY
+----------------------------------------------------------------------
+Tradeable stocks (A-D): 92
+Untradeable stocks (F): 58
+Average spread: 15.54%
+Median spread: 4.62%
+
+Grade distribution:
+  A: 17 stocks
+  B: 28 stocks
+  C: 27 stocks
+  D: 20 stocks
+  F: 58 stocks
+
+Poor liquidity (D/F): 78 stocks excluded/reduced
+
+----------------------------------------------------------------------
+TOP PREDICTIVE FEATURES
+----------------------------------------------------------------------
+   1. momentum: 0.4372
+   2. pb_ratio: 0.0638
+   3. debt_to_equity: 0.0621
+   4. value_score: 0.0513
+   5. earnings_surprise: 0.0501
+   6. short_interest: 0.0407
+   7. pb_vs_sector: 0.0356
+   8. gross_margin: 0.0314
+   9. ps_vs_sector: 0.0278
+  10. insider_ownership: 0.0272
+
+----------------------------------------------------------------------
+EXECUTION TIMING
+----------------------------------------------------------------------
+  universe: 0.0s
+  metrics: 394.7s
+  sentiment: 194.4s
+  predictions: 0.5s
+  liquidity: 32.4s
+  portfolio: 0.1s
+  paper_trades: 0.0s
+  update_trades: 2.7s
+  TOTAL: 624.8s (10.4 min)
+
+======================================================================
+Report generated: 2026-01-28 22:34:41 UTC
+======================================================================

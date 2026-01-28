@@ -1,0 +1,77 @@
+======================================================================
+MICRO-CAP WEEKLY ANALYSIS - 2026-01-26
+======================================================================
+
+Universe: 529 stocks screened
+Analyzed: 150 stocks with valid metrics
+
+----------------------------------------------------------------------
+TOP RECOMMENDATIONS
+----------------------------------------------------------------------
+ 1. BWEN   - OUTPERFORM (81%) - Buy $998 (297 shares @ $3.36) [Industrials]
+     Stop: $2.86 | Target: $4.37
+ 2. CODA   - OUTPERFORM (78%) - Buy $997 (95 shares @ $10.49) [Industrials]
+     Stop: $8.92 | Target: $13.64
+ 3. AVTX   - OUTPERFORM (78%) - Buy $986 (63 shares @ $15.65) [Healthcare]
+     Stop: $13.30 | Target: $20.35
+ 4. ATNI   - OUTPERFORM (76%) - Buy $994 (44 shares @ $22.60) [Communication Services]
+     Stop: $19.21 | Target: $29.38
+ 5. ALTO   - OUTPERFORM (74%) - Buy $999 (374 shares @ $2.67) [Basic Materials]
+     Stop: $2.27 | Target: $3.47
+ 6. CALC   - OUTPERFORM (74%) - Buy $997 (191 shares @ $5.22) [Healthcare]
+     Stop: $4.44 | Target: $6.79
+ 7. AP     - OUTPERFORM (74%) - Buy $995 (169 shares @ $5.89) [Industrials]
+     Stop: $5.01 | Target: $7.66
+ 8. AREC   - OUTPERFORM (72%) - Buy $997 (268 shares @ $3.72) [Basic Materials]
+     Stop: $3.16 | Target: $4.84
+ 9. CLNN   - OUTPERFORM (71%) - Buy $999 (197 shares @ $5.07) [Healthcare]
+     Stop: $4.31 | Target: $6.59
+10. BUDA   - OUTPERFORM (69%) - Buy $498 (53 shares @ $9.39) [Consumer Defensive]
+     Stop: $7.98 | Target: $12.21
+
+----------------------------------------------------------------------
+PAPER TRADING PERFORMANCE
+----------------------------------------------------------------------
+Total positions tracked: 24
+Active positions: 24
+Completed trades: 0
+Current unrealized return: -1.3%
+
+----------------------------------------------------------------------
+SECTOR BREAKDOWN
+----------------------------------------------------------------------
+  Industrials: 3 positions
+  Healthcare: 3 positions
+  Basic Materials: 2 positions
+  Communication Services: 1 position
+  Consumer Defensive: 1 position
+
+----------------------------------------------------------------------
+TOP PREDICTIVE FEATURES
+----------------------------------------------------------------------
+   1. momentum: 0.4090
+   2. pb_vs_sector: 0.0804
+   3. short_interest: 0.0684
+   4. earnings_surprise: 0.0675
+   5. debt_to_equity: 0.0411
+   6. pb_ratio: 0.0352
+   7. pe_ratio: 0.0266
+   8. accruals_ratio: 0.0262
+   9. gross_margin: 0.0246
+  10. revenue_growth: 0.0235
+
+----------------------------------------------------------------------
+EXECUTION TIMING
+----------------------------------------------------------------------
+  universe: 0.0s
+  metrics: 4108.3s
+  sentiment: 510.0s
+  predictions: 0.4s
+  portfolio: 0.1s
+  paper_trades: 0.0s
+  update_trades: 6.4s
+  TOTAL: 4625.2s (77.1 min)
+
+======================================================================
+Report generated: 2026-01-26 23:22:29 UTC
+======================================================================

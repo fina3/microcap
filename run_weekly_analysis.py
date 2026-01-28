@@ -39,9 +39,11 @@ import pytz
 from data.universe_screener import UniverseScreener
 from data.sentiment_collector import SentimentCollector
 from data.sector_analyzer import SectorAnalyzer
+from data.liquidity_checker import check_liquidity_batch, get_liquidity_summary
 from models.predictor import MicroCapPredictor
 from portfolio.risk_manager import RiskManager
 from tracking.paper_trader import PaperTrader
+from tracking.forward_test import ForwardTestTracker
 
 logging.basicConfig(
     level=logging.INFO,
@@ -78,6 +80,8 @@ class WeeklyAnalyzer:
         self.metrics_df = None
         self.sentiment_df = None
         self.predictions = None
+        self.liquidity_data = {}  # ticker -> {liquidity_grade, spread_pct}
+        self.liquidity_summary = None
         self.portfolio = None
         self.paper_trades_summary = None
 
@@ -306,23 +310,141 @@ class WeeklyAnalyzer:
         print(f"  Predicted OUTPERFORM: {sum(1 for p in self.predictions if p.prediction == 1)}")
         print(f"  Predicted UNDERPERFORM: {sum(1 for p in self.predictions if p.prediction == 0)}")
 
-        # Save predictions
+        # Save predictions (already sorted by rank)
         if not self.dry_run:
-            predictions_sorted = sorted(self.predictions, key=lambda x: x.confidence, reverse=True)
+            predictions_sorted = sorted(self.predictions, key=lambda x: x.rank)
             output_df = pd.DataFrame([p.to_dict() for p in predictions_sorted])
             output_file = self.data_dir / f"predictions_{self.date_str}.csv"
             output_df.to_csv(output_file, index=False)
             print(f"  Predictions saved: {output_file}")
 
+            # Save to rank history for tracking movement over time
+            self._save_rank_history(predictions_sorted)
+
         self.step_times['predictions'] = time.time() - start_time
         return True
 
+    def _save_rank_history(self, predictions: list) -> None:
+        """
+        Append current rankings to rank_history.csv for tracking movement.
+
+        Columns: date, ticker, rank, confidence, prev_rank, rank_change
+        """
+        tracking_dir = Path("data/tracking")
+        tracking_dir.mkdir(parents=True, exist_ok=True)
+        history_file = tracking_dir / "rank_history.csv"
+
+        # Load existing history to get previous ranks
+        prev_ranks = {}
+        if history_file.exists():
+            try:
+                existing_df = pd.read_csv(history_file)
+                # Get most recent rank for each ticker
+                existing_df['date'] = pd.to_datetime(existing_df['date'])
+                for ticker in existing_df['ticker'].unique():
+                    ticker_df = existing_df[existing_df['ticker'] == ticker]
+                    latest = ticker_df.sort_values('date', ascending=False).iloc[0]
+                    prev_ranks[ticker] = int(latest['rank'])
+            except Exception as e:
+                logger.warning(f"Could not load rank history: {e}")
+
+        # Build new rows
+        today = self.as_of_date.strftime('%Y-%m-%d')
+        new_rows = []
+        for pred in predictions:
+            prev_rank = prev_ranks.get(pred.ticker)
+            if prev_rank is not None:
+                rank_change = prev_rank - pred.rank  # Positive = improved
+            else:
+                rank_change = None  # NEW entry
+
+            new_rows.append({
+                'date': today,
+                'ticker': pred.ticker,
+                'rank': pred.rank,
+                'confidence': pred.confidence,
+                'prev_rank': prev_rank,
+                'rank_change': rank_change
+            })
+
+        new_df = pd.DataFrame(new_rows)
+
+        # Append to existing or create new
+        if history_file.exists():
+            existing_df = pd.read_csv(history_file)
+            # Remove any existing entries for today (in case of re-run)
+            existing_df = existing_df[existing_df['date'] != today]
+            combined_df = pd.concat([existing_df, new_df], ignore_index=True)
+        else:
+            combined_df = new_df
+
+        combined_df.to_csv(history_file, index=False)
+        print(f"  Rank history updated: {history_file} ({len(new_rows)} entries)")
+
     # =========================================================================
-    # STEP 5: Build Portfolio
+    # STEP 5: Check Liquidity
     # =========================================================================
-    def step5_build_portfolio(self) -> bool:
+    def step5_check_liquidity(self) -> bool:
+        """Check bid-ask spreads to identify illiquid stocks."""
+        self._log_step(5, "CHECK LIQUIDITY")
+        start_time = time.time()
+
+        if not self.predictions:
+            print("  ERROR: No predictions available!")
+            return False
+
+        tickers = [p.ticker for p in self.predictions]
+        print(f"  Checking liquidity for {len(tickers)} tickers...")
+
+        if self.dry_run:
+            print(f"  [DRY RUN] Would check liquidity for {len(tickers)} stocks")
+            # Try to load existing liquidity data
+            liquidity_file = self._find_latest_file("liquidity_*.csv")
+            if liquidity_file:
+                liq_df = pd.read_csv(liquidity_file)
+                for _, row in liq_df.iterrows():
+                    self.liquidity_data[row['ticker']] = {
+                        'liquidity_grade': row.get('liquidity_grade', '?'),
+                        'spread_pct': row.get('spread_pct')
+                    }
+        else:
+            # Check liquidity for all tickers
+            results = check_liquidity_batch(tickers)
+
+            # Store results
+            for r in results:
+                self.liquidity_data[r.ticker] = {
+                    'liquidity_grade': r.liquidity_grade,
+                    'spread_pct': r.spread_pct
+                }
+
+            # Generate summary
+            self.liquidity_summary = get_liquidity_summary(results)
+
+            print(f"\n  Liquidity Summary:")
+            print(f"    Tradeable (A-D): {self.liquidity_summary['tradeable']}")
+            print(f"    Untradeable (F): {self.liquidity_summary['untradeable']}")
+            print(f"    Average spread: {self.liquidity_summary['avg_spread_pct']}%")
+
+            print(f"\n  Grade Distribution:")
+            for grade, count in self.liquidity_summary['grade_counts'].items():
+                print(f"    {grade}: {count} stocks")
+
+            # Save liquidity data
+            output_df = pd.DataFrame([r.to_dict() for r in results])
+            output_file = self.data_dir / f"liquidity_{self.date_str}.csv"
+            output_df.to_csv(output_file, index=False)
+            print(f"\n  Liquidity data saved: {output_file}")
+
+        self.step_times['liquidity'] = time.time() - start_time
+        return True
+
+    # =========================================================================
+    # STEP 6: Build Portfolio
+    # =========================================================================
+    def step6_build_portfolio(self) -> bool:
         """Apply risk management and build portfolio."""
-        self._log_step(5, "BUILD PORTFOLIO")
+        self._log_step(6, "BUILD PORTFOLIO")
         start_time = time.time()
 
         if not self.predictions:
@@ -347,7 +469,7 @@ class WeeklyAnalyzer:
 
         print(f"  Predictions with valid prices: {len(predictions_with_prices)}")
 
-        # Build portfolio
+        # Build portfolio with liquidity filtering
         risk_manager = RiskManager(
             max_positions=10,
             stop_loss_pct=0.15,
@@ -357,7 +479,8 @@ class WeeklyAnalyzer:
         self.portfolio = risk_manager.build_portfolio(
             predictions=predictions_with_prices,
             portfolio_value=self.capital,
-            min_confidence=0.60
+            min_confidence=0.60,
+            liquidity_data=self.liquidity_data
         )
 
         print(f"  Portfolio positions: {len(self.portfolio)}")
@@ -376,11 +499,11 @@ class WeeklyAnalyzer:
         return True
 
     # =========================================================================
-    # STEP 6: Log Paper Trades
+    # STEP 7: Log Paper Trades
     # =========================================================================
-    def step6_log_paper_trades(self) -> bool:
+    def step7_log_paper_trades(self) -> bool:
         """Log portfolio positions to paper trading tracker."""
-        self._log_step(6, "LOG PAPER TRADES")
+        self._log_step(7, "LOG PAPER TRADES")
         start_time = time.time()
 
         if not self.portfolio:
@@ -427,11 +550,11 @@ class WeeklyAnalyzer:
         return True
 
     # =========================================================================
-    # STEP 7: Update Past Trades
+    # STEP 8: Update Past Trades
     # =========================================================================
-    def step7_update_past_trades(self) -> bool:
+    def step8_update_past_trades(self) -> bool:
         """Update past paper trades with current prices."""
-        self._log_step(7, "UPDATE PAST TRADES")
+        self._log_step(8, "UPDATE PAST TRADES")
         start_time = time.time()
 
         trader = PaperTrader()
@@ -458,11 +581,11 @@ class WeeklyAnalyzer:
         return True
 
     # =========================================================================
-    # STEP 8: Generate Report
+    # STEP 9: Generate Report
     # =========================================================================
-    def step8_generate_report(self) -> str:
+    def step9_generate_report(self) -> str:
         """Generate weekly summary report."""
-        self._log_step(8, "GENERATE REPORT")
+        self._log_step(9, "GENERATE REPORT")
         start_time = time.time()
 
         report_lines = []
@@ -478,18 +601,31 @@ class WeeklyAnalyzer:
             report_lines.append(f"Analyzed: {len(self.metrics_df)} stocks with valid metrics")
         report_lines.append("")
 
-        # Top recommendations
+        # Top ranked stocks
         report_lines.append("-" * 70)
-        report_lines.append("TOP RECOMMENDATIONS")
+        report_lines.append("TOP 20 RANKED STOCKS")
+        report_lines.append("-" * 70)
+
+        if self.predictions:
+            predictions_sorted = sorted(self.predictions, key=lambda x: x.rank)
+            for pred in predictions_sorted[:20]:
+                report_lines.append(
+                    f"Rank {pred.rank:3}: {pred.ticker:<6} ({pred.confidence:.1%} confidence)"
+                )
+
+        report_lines.append("")
+
+        # Portfolio recommendations
+        report_lines.append("-" * 70)
+        report_lines.append("PORTFOLIO RECOMMENDATIONS")
         report_lines.append("-" * 70)
 
         if self.portfolio:
             for i, pos in enumerate(self.portfolio[:10], 1):
                 sector = pos.sector or "Unknown"
                 report_lines.append(
-                    f"{i:2}. {pos.ticker:<6} - OUTPERFORM ({pos.confidence:.0%}) - "
-                    f"Buy ${pos.dollar_amount:,.0f} ({pos.shares} shares @ ${pos.current_price:.2f}) "
-                    f"[{sector}]"
+                    f"{i:2}. {pos.ticker:<6} - Buy ${pos.dollar_amount:,.0f} "
+                    f"({pos.shares} shares @ ${pos.current_price:.2f}) [{sector}]"
                 )
                 report_lines.append(
                     f"     Stop: ${pos.stop_loss:.2f} | Target: ${pos.take_profit:.2f}"
@@ -543,6 +679,28 @@ class WeeklyAnalyzer:
                 report_lines.append(f"  {sector}: {count} position{'s' if count > 1 else ''}")
         else:
             report_lines.append("No sector data available")
+
+        report_lines.append("")
+
+        # Liquidity summary
+        report_lines.append("-" * 70)
+        report_lines.append("LIQUIDITY SUMMARY")
+        report_lines.append("-" * 70)
+
+        if self.liquidity_summary:
+            report_lines.append(f"Tradeable stocks (A-D): {self.liquidity_summary['tradeable']}")
+            report_lines.append(f"Untradeable stocks (F): {self.liquidity_summary['untradeable']}")
+            report_lines.append(f"Average spread: {self.liquidity_summary['avg_spread_pct']}%")
+            report_lines.append(f"Median spread: {self.liquidity_summary['median_spread_pct']}%")
+            report_lines.append("")
+            report_lines.append("Grade distribution:")
+            for grade, count in self.liquidity_summary['grade_counts'].items():
+                report_lines.append(f"  {grade}: {count} stocks")
+            if self.liquidity_summary['poor_liquidity_tickers']:
+                report_lines.append("")
+                report_lines.append(f"Poor liquidity (D/F): {len(self.liquidity_summary['poor_liquidity_tickers'])} stocks excluded/reduced")
+        else:
+            report_lines.append("No liquidity data available")
 
         report_lines.append("")
 
@@ -622,24 +780,73 @@ class WeeklyAnalyzer:
         if not self.step4_run_predictions():
             return False
 
-        # Step 5: Build Portfolio
-        if not self.step5_build_portfolio():
+        # Step 5: Check Liquidity
+        if not self.step5_check_liquidity():
             return False
 
-        # Step 6: Log Paper Trades
-        if not self.step6_log_paper_trades():
+        # Step 6: Build Portfolio
+        if not self.step6_build_portfolio():
             return False
 
-        # Step 7: Update Past Trades
-        if not self.step7_update_past_trades():
+        # Step 7: Log Paper Trades
+        if not self.step7_log_paper_trades():
             return False
 
-        # Step 8: Generate Report
-        report = self.step8_generate_report()
+        # Step 8: Update Past Trades
+        if not self.step8_update_past_trades():
+            return False
+
+        # Step 9: Generate Report
+        report = self.step9_generate_report()
 
         # Print final report
         print("\n" + report)
 
+        return True
+
+    # =========================================================================
+    # STEP 10: Log to Forward Test (Optional)
+    # =========================================================================
+    def step10_log_forward_test(self, top_n: int = 20, model_version: str = "rf_v1") -> bool:
+        """Log top predictions to forward test tracker."""
+        self._log_step(10, "LOG FORWARD TEST")
+        start_time = time.time()
+
+        if not self.predictions:
+            print("  ERROR: No predictions available!")
+            return False
+
+        tracker = ForwardTestTracker()
+
+        # Show countdown
+        print(f"  {tracker.get_countdown_string()}")
+
+        # Prepare predictions DataFrame
+        predictions_sorted = sorted(self.predictions, key=lambda x: x.rank)
+        pred_df = pd.DataFrame([
+            {
+                'ticker': p.ticker,
+                'rank': p.rank,
+                'confidence': p.confidence,
+                'predicted_direction': p.predicted_direction
+            }
+            for p in predictions_sorted
+        ])
+
+        if self.dry_run:
+            print(f"  [DRY RUN] Would log top {top_n} predictions to forward test")
+        else:
+            logged = tracker.log_weekly_predictions(
+                pred_df,
+                top_n=top_n,
+                model_version=model_version
+            )
+            print(f"  Logged {logged} predictions to forward test tracker")
+
+            if logged == 0:
+                print("  Note: Predictions may already be logged for today")
+
+        self.step_times['forward_test'] = time.time() - start_time
         return True
 
 
@@ -659,8 +866,8 @@ def main():
     parser.add_argument(
         '--limit',
         type=int,
-        default=None,
-        help="Limit number of stocks to process"
+        default=150,
+        help="Limit number of stocks to process (default: 150)"
     )
 
     parser.add_argument(
@@ -676,7 +883,30 @@ def main():
         help="Portfolio capital (default: $10,000)"
     )
 
+    parser.add_argument(
+        '--forward-test',
+        action='store_true',
+        default=True,
+        help="Log predictions to forward test tracker (default: enabled)"
+    )
+
+    parser.add_argument(
+        '--no-forward-test',
+        action='store_true',
+        help="Disable forward test logging"
+    )
+
+    parser.add_argument(
+        '--model-version',
+        type=str,
+        default="rf_v1",
+        help="Model version string for forward test tracking (default: rf_v1)"
+    )
+
     args = parser.parse_args()
+
+    # Handle forward test flag
+    do_forward_test = args.forward_test and not args.no_forward_test
 
     analyzer = WeeklyAnalyzer(
         capital=args.capital,
@@ -687,6 +917,13 @@ def main():
         skip_universe=args.skip_universe,
         limit=args.limit
     )
+
+    # Log to forward test if enabled and analysis succeeded
+    if success and do_forward_test:
+        analyzer.step10_log_forward_test(
+            top_n=20,
+            model_version=args.model_version
+        )
 
     sys.exit(0 if success else 1)
 

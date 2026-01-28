@@ -118,42 +118,138 @@ def print_data_status():
         print("  Sentiment:  No data found")
 
 
+def load_rank_history() -> pd.DataFrame | None:
+    """Load rank history for movement tracking."""
+    history_file = "data/tracking/rank_history.csv"
+    if not os.path.exists(history_file):
+        return None
+    try:
+        return pd.read_csv(history_file)
+    except Exception:
+        return None
+
+
+def get_previous_rank(ticker: str, history_df: pd.DataFrame | None) -> int | None:
+    """Get previous week's rank for a ticker."""
+    if history_df is None or history_df.empty:
+        return None
+
+    # Get the second most recent date's data for this ticker
+    ticker_history = history_df[history_df['ticker'] == ticker].copy()
+    if ticker_history.empty:
+        return None
+
+    ticker_history['date'] = pd.to_datetime(ticker_history['date'])
+    ticker_history = ticker_history.sort_values('date', ascending=False)
+
+    # Skip current date, get previous
+    if len(ticker_history) >= 2:
+        return int(ticker_history.iloc[1]['rank'])
+    return None
+
+
+def format_rank_change(current_rank: int, prev_rank: int | None) -> str:
+    """Format rank change for display."""
+    if prev_rank is None:
+        return "NEW"
+    diff = prev_rank - current_rank  # Positive = improved (moved up)
+    if diff > 0:
+        return f"+{diff}"
+    elif diff < 0:
+        return str(diff)
+    else:
+        return "-"
+
+
+def load_liquidity_data() -> pd.DataFrame | None:
+    """Load latest liquidity data."""
+    liquidity_file = get_latest_file("data/raw/liquidity_*.csv")
+    if not liquidity_file:
+        return None
+    return load_csv_safe(liquidity_file)
+
+
 def print_top_picks():
-    """Print top 5 current picks section."""
-    print_section("TOP 5 CURRENT PICKS")
+    """Print top 20 ranked stocks with rank movement and liquidity."""
+    print_section("TOP 20 RANKED STOCKS")
 
-    # Load portfolio (buy recommendations)
-    portfolio_file = get_latest_file("data/raw/portfolio_*.csv")
-    metrics_file = get_latest_file("data/raw/microcap_metrics_*.csv")
+    # Load predictions (sorted by rank)
+    predictions_file = get_latest_file("data/raw/predictions_*.csv")
 
-    if not portfolio_file:
-        print("  No portfolio data found")
+    if not predictions_file:
+        print("  No predictions data found")
         return
 
-    portfolio_df = load_csv_safe(portfolio_file)
-    if portfolio_df is None or portfolio_df.empty:
-        print("  No portfolio data found")
+    predictions_df = load_csv_safe(predictions_file)
+    if predictions_df is None or predictions_df.empty:
+        print("  No predictions data found")
         return
 
-    # Filter to BUY actions and sort by confidence
-    buys = portfolio_df[portfolio_df['action'] == 'BUY'].copy()
-    if buys.empty:
-        print("  No BUY recommendations found")
+    # Check if rank column exists
+    if 'rank' not in predictions_df.columns:
+        print("  Predictions file missing rank column - run predictions again")
         return
 
-    buys = buys.sort_values('confidence', ascending=False).head(5)
+    # Sort by rank and take top 20
+    predictions_df = predictions_df.sort_values('rank').head(20)
+
+    # Load rank history for movement tracking
+    history_df = load_rank_history()
+
+    # Load liquidity data
+    liquidity_df = load_liquidity_data()
+    liquidity_map = {}
+    if liquidity_df is not None:
+        for _, row in liquidity_df.iterrows():
+            liquidity_map[row['ticker']] = {
+                'spread_pct': row.get('spread_pct'),
+                'liquidity_grade': row.get('liquidity_grade', '?')
+            }
+
+    # Track poor liquidity warnings
+    poor_liquidity_count = 0
 
     # Print header
-    print(f"  {'Ticker':<8} {'Direction':<12} {'Conf%':>7} {'Sector':<20} {'Price':>10}")
-    print(f"  {'-'*8} {'-'*12} {'-'*7} {'-'*20} {'-'*10}")
+    print(f"  {'Rank':<5} {'Ticker':<7} {'Conf%':>6} {'Move':>5} {'Spread':>7} {'Liq':>4}")
+    print(f"  {'-'*5} {'-'*7} {'-'*6} {'-'*5} {'-'*7} {'-'*4}")
 
-    for _, row in buys.iterrows():
+    for _, row in predictions_df.iterrows():
         ticker = row['ticker']
+        rank = int(row['rank'])
         confidence = row['confidence'] * 100
-        sector = row.get('sector', 'N/A')[:20]
-        price = row.get('current_price', 0)
 
-        print(f"  {ticker:<8} {'OUTPERFORM':<12} {confidence:>6.1f}% {sector:<20} ${price:>8.2f}")
+        # Get rank movement
+        prev_rank = get_previous_rank(ticker, history_df)
+        rank_change = format_rank_change(rank, prev_rank)
+
+        # Get liquidity info
+        liq_info = liquidity_map.get(ticker, {})
+        spread = liq_info.get('spread_pct')
+        grade = liq_info.get('liquidity_grade', '?')
+
+        if spread is not None:
+            spread_str = f"{spread:.1f}%"
+        else:
+            spread_str = "N/A"
+
+        # Flag poor liquidity (D or F grades)
+        if grade in ('D', 'F'):
+            poor_liquidity_count += 1
+            grade_str = f"*{grade}*"  # Mark with asterisks
+        else:
+            grade_str = f" {grade} "
+
+        print(f"  {rank:<5} {ticker:<7} {confidence:>5.1f}% {rank_change:>5} {spread_str:>7} {grade_str:>4}")
+
+    # Show liquidity warning
+    if poor_liquidity_count > 0:
+        print()
+        print(f"  * {poor_liquidity_count} stocks have poor liquidity (grade D/F) - trade with caution")
+
+    # Show if no liquidity data
+    if not liquidity_map:
+        print()
+        print("  Note: Run 'python pull_liquidity_data.py' to get spread data")
 
 
 def print_paper_trading_status():

@@ -33,19 +33,27 @@ class PredictionResult:
     as_of_date: datetime
     prediction: int  # 1 = outperform, 0 = underperform
     confidence: float  # 0-1 probability
-    predicted_direction: str  # "OUTPERFORM" / "UNDERPERFORM"
+    predicted_direction: str  # DEPRECATED - use rank instead
     actual_return_52w: float  # Historical return for comparison
     feature_contributions: Dict[str, float] = field(default_factory=dict)
+    rank: int = 0  # Strict ordering 1 to N (1 = best)
+    momentum_score: float = 0.0  # For tiebreaking
+    sentiment_score: float = 0.0  # For tiebreaking
+    market_cap: float = 0.0  # For tiebreaking (smaller wins)
 
     def to_dict(self) -> Dict:
         """Convert to dictionary."""
         return {
             'ticker': self.ticker,
+            'rank': self.rank,
             'as_of_date': self.as_of_date,
             'prediction': self.prediction,
             'confidence': self.confidence,
             'predicted_direction': self.predicted_direction,
             'actual_return_52w': self.actual_return_52w,
+            'momentum_score': self.momentum_score,
+            'sentiment_score': self.sentiment_score,
+            'market_cap': self.market_cap,
             'feature_contributions': str(self.feature_contributions)
         }
 
@@ -504,7 +512,7 @@ class MicroCapPredictor:
             df: Merged dataset
 
         Returns:
-            List of PredictionResult objects
+            List of PredictionResult objects with strict rank ordering
         """
         X, y, _ = self.prepare_features(df)
 
@@ -525,6 +533,17 @@ class MicroCapPredictor:
             pred = predictions[idx]
             conf = confidences[idx]
 
+            # Extract tiebreaker values
+            momentum = row.get('52_week_price_change_pct', 0.0)
+            if pd.isna(momentum):
+                momentum = 0.0
+            sentiment = row.get('net_sentiment', 0.0)
+            if pd.isna(sentiment):
+                sentiment = 0.0
+            market_cap = row.get('market_cap', float('inf'))
+            if pd.isna(market_cap):
+                market_cap = float('inf')
+
             result = PredictionResult(
                 ticker=row['ticker'],
                 as_of_date=datetime.now(pytz.utc),
@@ -532,11 +551,57 @@ class MicroCapPredictor:
                 confidence=float(conf),
                 predicted_direction="OUTPERFORM" if pred == 1 else "UNDERPERFORM",
                 actual_return_52w=row.get('52_week_price_change_pct', np.nan),
-                feature_contributions=feature_importance
+                feature_contributions=feature_importance,
+                momentum_score=float(momentum),
+                sentiment_score=float(sentiment),
+                market_cap=float(market_cap)
             )
             results.append(result)
 
+        # Apply strict ranking with tiebreakers
+        results = self._apply_strict_ranking(results)
+
         return results
+
+    def _apply_strict_ranking(
+        self,
+        results: List[PredictionResult]
+    ) -> List[PredictionResult]:
+        """
+        Apply strict 1-to-N ranking with tiebreakers.
+
+        Tiebreaker order (when confidence is equal):
+        1. momentum_score (higher is better)
+        2. sentiment_score (higher is better)
+        3. market_cap (smaller wins - favors smaller micro-caps)
+
+        Args:
+            results: List of PredictionResult with confidence scores
+
+        Returns:
+            Same list with rank field populated (1 = best)
+        """
+        # Sort by: confidence DESC, momentum DESC, sentiment DESC, market_cap ASC
+        sorted_results = sorted(
+            results,
+            key=lambda x: (
+                -x.confidence,
+                -x.momentum_score,
+                -x.sentiment_score,
+                x.market_cap  # Smaller wins (ASC)
+            )
+        )
+
+        # Assign strict ranks 1 to N
+        for rank, result in enumerate(sorted_results, start=1):
+            result.rank = rank
+
+        logger.info(
+            f"Applied strict ranking to {len(results)} predictions. "
+            f"Top 3: {[r.ticker for r in sorted_results[:3]]}"
+        )
+
+        return sorted_results
 
     def evaluate_vs_actual(
         self,
