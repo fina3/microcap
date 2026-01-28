@@ -2,6 +2,12 @@
 Paper Trading System for tracking predictions without real money.
 
 Logs predictions with entry prices and tracks performance over time.
+
+Exit conditions (checked in order):
+1. Stop loss: -15% from entry
+2. Take profit: +30% from entry
+3. Max holding period: 10 trading days (~2 weeks)
+4. Target date reached (legacy fallback)
 """
 
 import logging
@@ -25,6 +31,11 @@ logger = logging.getLogger(__name__)
 # Default storage path
 DEFAULT_TRADES_FILE = Path("data/tracking/paper_trades.csv")
 
+# Trading constraints
+STOP_LOSS_PCT = -15.0       # Exit if down 15%
+TAKE_PROFIT_PCT = 30.0      # Exit if up 30%
+MAX_HOLDING_DAYS = 10       # Max trading days to hold (10 trading days = ~2 weeks)
+
 
 @dataclass
 class PaperTrade:
@@ -43,6 +54,9 @@ class PaperTrade:
     is_completed: bool = False
     is_winner: Optional[bool] = None  # True if prediction was correct
     benchmark_return_pct: Optional[float] = None  # IWC return for comparison
+    exit_reason: Optional[str] = None  # STOP_LOSS, TAKE_PROFIT, MAX_HOLDING, TARGET_DATE
+    exit_date: Optional[datetime] = None  # When the trade was closed
+    trading_days_held: int = 0  # Number of trading days position was held
     notes: str = ""
 
     def to_dict(self) -> Dict:
@@ -62,6 +76,9 @@ class PaperTrade:
             'is_completed': self.is_completed,
             'is_winner': self.is_winner,
             'benchmark_return_pct': self.benchmark_return_pct,
+            'exit_reason': self.exit_reason,
+            'exit_date': self.exit_date,
+            'trading_days_held': self.trading_days_held,
             'notes': self.notes
         }
 
@@ -113,7 +130,7 @@ class PaperTrader:
                 df = pd.read_csv(self.trades_file)
 
                 # Parse dates
-                date_cols = ['entry_date', 'target_date']
+                date_cols = ['entry_date', 'target_date', 'exit_date']
                 for col in date_cols:
                     if col in df.columns:
                         df[col] = pd.to_datetime(df[col])
@@ -136,6 +153,9 @@ class PaperTrader:
                         is_completed=bool(row.get('is_completed', False)),
                         is_winner=row.get('is_winner'),
                         benchmark_return_pct=row.get('benchmark_return_pct'),
+                        exit_reason=row.get('exit_reason'),
+                        exit_date=row.get('exit_date'),
+                        trading_days_held=int(row.get('trading_days_held', 0)),
                         notes=row.get('notes', '')
                     )
                     self.trades.append(trade)
@@ -219,14 +239,124 @@ class PaperTrader:
             stock = yf.Ticker(ticker)
             hist = stock.history(period="1d")
             if not hist.empty:
-                return hist['Close'].iloc[-1]
+                return float(hist['Close'].iloc[-1])
         except Exception as e:
             logger.error(f"Error fetching price for {ticker}: {e}")
         return None
 
+    def get_price_history(self, ticker: str, start_date: datetime, end_date: datetime) -> pd.DataFrame:
+        """
+        Fetch price history for a ticker between dates.
+
+        Returns DataFrame with Date index and Close prices.
+        """
+        try:
+            stock = yf.Ticker(ticker)
+            # Add buffer days to ensure we get enough data
+            start_str = (start_date - timedelta(days=5)).strftime('%Y-%m-%d')
+            end_str = (end_date + timedelta(days=5)).strftime('%Y-%m-%d')
+            hist = stock.history(start=start_str, end=end_str)
+            return hist
+        except Exception as e:
+            logger.error(f"Error fetching history for {ticker}: {e}")
+            return pd.DataFrame()
+
+    def count_trading_days(self, start_date: datetime, end_date: datetime, price_history: pd.DataFrame) -> int:
+        """
+        Count trading days between two dates using actual price history.
+
+        Returns number of trading days (days with price data).
+        """
+        if price_history.empty:
+            # Fallback: estimate ~5 trading days per week
+            calendar_days = (end_date - start_date).days
+            return int(calendar_days * 5 / 7)
+
+        # Ensure dates are comparable
+        start_dt = pd.Timestamp(start_date).tz_localize(None) if start_date.tzinfo else pd.Timestamp(start_date)
+        end_dt = pd.Timestamp(end_date).tz_localize(None) if end_date.tzinfo else pd.Timestamp(end_date)
+
+        # Count trading days in the history between start and end
+        hist_dates = price_history.index.tz_localize(None) if price_history.index.tzinfo else price_history.index
+        trading_days = hist_dates[(hist_dates >= start_dt) & (hist_dates <= end_dt)]
+
+        return len(trading_days)
+
+    def get_price_on_trading_day(self, price_history: pd.DataFrame, entry_date: datetime, trading_day_num: int) -> tuple:
+        """
+        Get the closing price on the Nth trading day after entry.
+
+        Returns (price, actual_date) or (None, None) if not available.
+        """
+        if price_history.empty:
+            return None, None
+
+        # Ensure entry_date is comparable
+        entry_dt = pd.Timestamp(entry_date).tz_localize(None) if entry_date.tzinfo else pd.Timestamp(entry_date)
+
+        # Get trading days after entry
+        hist_dates = price_history.index.tz_localize(None) if price_history.index.tzinfo else price_history.index
+        future_days = price_history[hist_dates >= entry_dt]
+
+        if len(future_days) >= trading_day_num:
+            target_row = future_days.iloc[trading_day_num - 1]  # 0-indexed, so day 10 is index 9
+            target_date = future_days.index[trading_day_num - 1]
+            return float(target_row['Close']), target_date
+
+        return None, None
+
+    def _check_exit_conditions(self, trade: 'PaperTrade', price_history: pd.DataFrame, benchmark_history: pd.DataFrame) -> tuple:
+        """
+        Check all exit conditions for a trade.
+
+        Returns (should_exit, exit_reason, exit_price, exit_date, trading_days_held)
+        """
+        now = datetime.now(pytz.utc)
+        entry_date = ensure_utc(trade.entry_date)
+
+        if price_history.empty:
+            return False, None, None, None, 0
+
+        # Ensure entry_date is comparable
+        entry_dt = pd.Timestamp(entry_date).tz_localize(None)
+
+        # Get trading days after entry
+        hist_index = price_history.index.tz_localize(None) if price_history.index.tzinfo else price_history.index
+        future_prices = price_history[hist_index >= entry_dt]
+
+        if future_prices.empty:
+            return False, None, None, None, 0
+
+        # Check each trading day for exit conditions
+        for i, (date, row) in enumerate(future_prices.iterrows(), 1):
+            close_price = float(row['Close'])
+            return_pct = ((close_price - trade.entry_price) / trade.entry_price) * 100
+
+            # Check stop loss
+            if return_pct <= STOP_LOSS_PCT:
+                return True, "STOP_LOSS", close_price, date, i
+
+            # Check take profit
+            if return_pct >= TAKE_PROFIT_PCT:
+                return True, "TAKE_PROFIT", close_price, date, i
+
+            # Check max holding period
+            if i >= MAX_HOLDING_DAYS:
+                return True, "MAX_HOLDING", close_price, date, i
+
+        # No exit triggered yet - return current state
+        current_trading_days = len(future_prices)
+        current_price = float(future_prices.iloc[-1]['Close'])
+        return False, None, current_price, None, current_trading_days
+
     def update_results(self) -> Dict:
         """
-        Update all trades with current prices and mark completed ones.
+        Update all trades with current prices and check exit conditions.
+
+        Exit conditions (checked in order each trading day):
+        1. Stop loss: position down 15% from entry
+        2. Take profit: position up 30% from entry
+        3. Max holding: 10 trading days reached
 
         Returns:
             Summary of updates made
@@ -235,16 +365,17 @@ class PaperTrader:
         updates = {
             'trades_updated': 0,
             'trades_completed': 0,
+            'stop_loss_exits': 0,
+            'take_profit_exits': 0,
+            'max_holding_exits': 0,
             'errors': []
         }
 
-        # Get benchmark return
-        benchmark_prices = {}
+        # Get benchmark history
+        benchmark_history = pd.DataFrame()
         try:
             iwc = yf.Ticker(self.benchmark_ticker)
-            benchmark_hist = iwc.history(period="1y")
-            if not benchmark_hist.empty:
-                benchmark_prices = benchmark_hist['Close'].to_dict()
+            benchmark_history = iwc.history(period="3mo")
         except Exception as e:
             logger.error(f"Error fetching benchmark: {e}")
 
@@ -254,39 +385,60 @@ class PaperTrader:
                 if trade.is_completed:
                     continue
 
-                # Get current price
-                current_price = self.get_current_price(trade.ticker)
-                if current_price is None:
-                    updates['errors'].append(f"Could not fetch price for {trade.ticker}")
+                # Get price history since entry
+                entry_date = ensure_utc(trade.entry_date)
+                price_history = self.get_price_history(trade.ticker, entry_date, now)
+
+                if price_history.empty:
+                    updates['errors'].append(f"Could not fetch history for {trade.ticker}")
                     continue
 
-                trade.current_price = current_price
-                trade.current_return_pct = (
-                    (current_price - trade.entry_price) / trade.entry_price
-                ) * 100
+                # Check exit conditions
+                should_exit, exit_reason, exit_price, exit_date, trading_days = self._check_exit_conditions(
+                    trade, price_history, benchmark_history
+                )
+
+                # Update current state
+                trade.current_price = exit_price if exit_price else self.get_current_price(trade.ticker)
+                if trade.current_price and trade.entry_price > 0:
+                    trade.current_return_pct = (
+                        (trade.current_price - trade.entry_price) / trade.entry_price
+                    ) * 100
+                trade.trading_days_held = trading_days
 
                 updates['trades_updated'] += 1
 
-                # Check if trade is now complete (past target date)
-                if now >= ensure_utc(trade.target_date):
+                # Complete the trade if exit triggered
+                if should_exit:
                     trade.is_completed = True
-                    trade.final_price = current_price
-                    trade.final_return_pct = trade.current_return_pct
+                    trade.exit_reason = exit_reason
+                    trade.exit_date = exit_date
+                    trade.final_price = exit_price
+                    trade.final_return_pct = (
+                        (exit_price - trade.entry_price) / trade.entry_price
+                    ) * 100
 
                     # Calculate benchmark return over same period
-                    # (simplified: use most recent benchmark data)
-                    if benchmark_prices:
+                    if not benchmark_history.empty:
                         try:
-                            entry_benchmark = list(benchmark_prices.values())[0]
-                            current_benchmark = list(benchmark_prices.values())[-1]
-                            trade.benchmark_return_pct = (
-                                (current_benchmark - entry_benchmark) / entry_benchmark
-                            ) * 100
-                        except Exception:
-                            pass
+                            entry_dt = pd.Timestamp(entry_date).tz_localize(None)
+                            exit_dt = pd.Timestamp(exit_date).tz_localize(None) if exit_date else None
+
+                            bench_index = benchmark_history.index.tz_localize(None) if benchmark_history.index.tzinfo else benchmark_history.index
+
+                            entry_bench = benchmark_history[bench_index >= entry_dt]
+                            if not entry_bench.empty and exit_dt:
+                                exit_bench = benchmark_history[bench_index <= exit_dt]
+                                if not exit_bench.empty:
+                                    bench_entry_price = float(entry_bench.iloc[0]['Close'])
+                                    bench_exit_price = float(exit_bench.iloc[-1]['Close'])
+                                    trade.benchmark_return_pct = (
+                                        (bench_exit_price - bench_entry_price) / bench_entry_price
+                                    ) * 100
+                        except Exception as e:
+                            logger.debug(f"Could not calculate benchmark return: {e}")
 
                     # Determine if prediction was correct
-                    # Outperform = 1 means we expected stock to beat benchmark
                     if trade.benchmark_return_pct is not None:
                         outperformed = trade.final_return_pct > trade.benchmark_return_pct
                         trade.is_winner = (
@@ -294,17 +446,23 @@ class PaperTrader:
                             (trade.prediction == 0 and not outperformed)
                         )
                     else:
-                        # Without benchmark, just use 10% threshold
-                        outperformed = trade.final_return_pct > 10
-                        trade.is_winner = (
-                            (trade.prediction == 1 and outperformed) or
-                            (trade.prediction == 0 and not outperformed)
-                        )
+                        # Without benchmark, win if positive return
+                        trade.is_winner = trade.final_return_pct > 0
 
                     updates['trades_completed'] += 1
+
+                    # Track exit type
+                    if exit_reason == "STOP_LOSS":
+                        updates['stop_loss_exits'] += 1
+                    elif exit_reason == "TAKE_PROFIT":
+                        updates['take_profit_exits'] += 1
+                    elif exit_reason == "MAX_HOLDING":
+                        updates['max_holding_exits'] += 1
+
                     logger.info(
-                        f"{trade.ticker}: COMPLETED - "
+                        f"{trade.ticker}: {exit_reason} - "
                         f"return: {trade.final_return_pct:+.1f}%, "
+                        f"days held: {trading_days}, "
                         f"winner: {trade.is_winner}"
                     )
 
@@ -317,7 +475,8 @@ class PaperTrader:
         logger.info(
             f"Update complete - "
             f"updated: {updates['trades_updated']}, "
-            f"completed: {updates['trades_completed']}, "
+            f"completed: {updates['trades_completed']} "
+            f"(SL: {updates['stop_loss_exits']}, TP: {updates['take_profit_exits']}, MAX: {updates['max_holding_exits']}), "
             f"errors: {len(updates['errors'])}"
         )
 
@@ -360,6 +519,30 @@ class PaperTrader:
                 summary['worst_return_pct'] = min(returns)
                 summary['std_return_pct'] = np.std(returns)
 
+            # Exit reason breakdown
+            stop_loss_trades = [t for t in completed_trades if t.exit_reason == "STOP_LOSS"]
+            take_profit_trades = [t for t in completed_trades if t.exit_reason == "TAKE_PROFIT"]
+            max_holding_trades = [t for t in completed_trades if t.exit_reason == "MAX_HOLDING"]
+
+            summary['exit_reasons'] = {
+                'stop_loss': len(stop_loss_trades),
+                'take_profit': len(take_profit_trades),
+                'max_holding': len(max_holding_trades),
+            }
+
+            # Average return by exit reason
+            if stop_loss_trades:
+                summary['stop_loss_avg_return'] = np.mean([t.final_return_pct for t in stop_loss_trades if t.final_return_pct])
+            if take_profit_trades:
+                summary['take_profit_avg_return'] = np.mean([t.final_return_pct for t in take_profit_trades if t.final_return_pct])
+            if max_holding_trades:
+                summary['max_holding_avg_return'] = np.mean([t.final_return_pct for t in max_holding_trades if t.final_return_pct])
+
+            # Average trading days held
+            days_held = [t.trading_days_held for t in completed_trades if t.trading_days_held > 0]
+            if days_held:
+                summary['avg_days_held'] = np.mean(days_held)
+
             # Best and worst trades
             if completed_trades:
                 best_trade = max(completed_trades, key=lambda t: t.final_return_pct or 0)
@@ -367,12 +550,16 @@ class PaperTrader:
                 summary['best_trade'] = {
                     'ticker': best_trade.ticker,
                     'return_pct': best_trade.final_return_pct,
-                    'prediction': best_trade.predicted_direction
+                    'prediction': best_trade.predicted_direction,
+                    'exit_reason': best_trade.exit_reason,
+                    'days_held': best_trade.trading_days_held
                 }
                 summary['worst_trade'] = {
                     'ticker': worst_trade.ticker,
                     'return_pct': worst_trade.final_return_pct,
-                    'prediction': worst_trade.predicted_direction
+                    'prediction': worst_trade.predicted_direction,
+                    'exit_reason': worst_trade.exit_reason,
+                    'days_held': worst_trade.trading_days_held
                 }
 
             # Confidence calibration
@@ -396,13 +583,15 @@ class PaperTrader:
             if current_returns:
                 summary['pending_avg_return_pct'] = np.mean(current_returns)
 
-            # Days until next completion
-            now = datetime.now(pytz.utc)
-            days_remaining = [
-                (ensure_utc(t.target_date) - now).days
-                for t in pending_trades
-            ]
-            summary['next_completion_days'] = min(days_remaining)
+            # Trading days held for pending
+            pending_days = [t.trading_days_held for t in pending_trades]
+            if pending_days:
+                summary['pending_avg_days_held'] = np.mean(pending_days)
+                summary['pending_max_days_held'] = max(pending_days)
+
+            # Days until max holding period
+            days_until_forced_exit = [MAX_HOLDING_DAYS - t.trading_days_held for t in pending_trades]
+            summary['next_forced_exit_days'] = min(days_until_forced_exit) if days_until_forced_exit else None
 
         return summary
 
@@ -439,12 +628,33 @@ class PaperTrader:
                 print(f"Worst return: {summary['worst_return_pct']:+.1f}%")
                 print(f"Std deviation: {summary['std_return_pct']:.1f}%")
 
+            if 'avg_days_held' in summary:
+                print(f"Avg days held: {summary['avg_days_held']:.1f} trading days")
+
+            # Exit reason breakdown
+            if 'exit_reasons' in summary:
+                print("\n--- EXIT REASONS ---")
+                reasons = summary['exit_reasons']
+                print(f"Stop loss (-{abs(STOP_LOSS_PCT):.0f}%):  {reasons['stop_loss']}")
+                if 'stop_loss_avg_return' in summary:
+                    print(f"  Avg return: {summary['stop_loss_avg_return']:+.1f}%")
+                print(f"Take profit (+{TAKE_PROFIT_PCT:.0f}%): {reasons['take_profit']}")
+                if 'take_profit_avg_return' in summary:
+                    print(f"  Avg return: {summary['take_profit_avg_return']:+.1f}%")
+                print(f"Max holding ({MAX_HOLDING_DAYS}d):    {reasons['max_holding']}")
+                if 'max_holding_avg_return' in summary:
+                    print(f"  Avg return: {summary['max_holding_avg_return']:+.1f}%")
+
             if 'best_trade' in summary:
                 best = summary['best_trade']
-                print(f"\nBest trade: {best['ticker']} ({best['prediction']}) -> {best['return_pct']:+.1f}%")
+                exit_str = f" [{best.get('exit_reason', 'N/A')}]" if best.get('exit_reason') else ""
+                days_str = f" ({best.get('days_held', 0)}d)" if best.get('days_held') else ""
+                print(f"\nBest trade: {best['ticker']} -> {best['return_pct']:+.1f}%{exit_str}{days_str}")
 
                 worst = summary['worst_trade']
-                print(f"Worst trade: {worst['ticker']} ({worst['prediction']}) -> {worst['return_pct']:+.1f}%")
+                exit_str = f" [{worst.get('exit_reason', 'N/A')}]" if worst.get('exit_reason') else ""
+                days_str = f" ({worst.get('days_held', 0)}d)" if worst.get('days_held') else ""
+                print(f"Worst trade: {worst['ticker']} -> {worst['return_pct']:+.1f}%{exit_str}{days_str}")
 
             if 'high_confidence_win_rate' in summary:
                 print(f"\nHigh confidence (>=80%) win rate: {summary['high_confidence_win_rate']:.1%}")
@@ -455,8 +665,12 @@ class PaperTrader:
             print("\n--- PENDING TRADES ---")
             if 'pending_avg_return_pct' in summary:
                 print(f"Current avg return: {summary['pending_avg_return_pct']:+.1f}%")
-            if 'next_completion_days' in summary:
-                print(f"Next completion in: {summary['next_completion_days']} days")
+            if 'pending_avg_days_held' in summary:
+                print(f"Avg days held: {summary['pending_avg_days_held']:.1f} trading days")
+            if 'pending_max_days_held' in summary:
+                print(f"Max days held: {summary['pending_max_days_held']} trading days")
+            if 'next_forced_exit_days' in summary and summary['next_forced_exit_days'] is not None:
+                print(f"Next forced exit in: {summary['next_forced_exit_days']} trading days")
 
         # List recent trades
         print("\n--- RECENT TRADES ---")
@@ -467,13 +681,19 @@ class PaperTrader:
             for _, row in df.iterrows():
                 status = "DONE" if row['is_completed'] else "PENDING"
                 ret = row['current_return_pct'] if not row['is_completed'] else row['final_return_pct']
-                ret_str = f"{ret:+.1f}%" if ret is not None else "N/A"
+                ret_str = f"{ret:+.1f}%" if ret is not None and pd.notna(ret) else "N/A"
                 winner_str = ""
-                if row['is_completed'] and row['is_winner'] is not None:
-                    winner_str = " [WIN]" if row['is_winner'] else " [LOSS]"
+                exit_str = ""
+                days_str = ""
+                if row['is_completed']:
+                    if row['is_winner'] is not None and pd.notna(row['is_winner']):
+                        winner_str = " [WIN]" if row['is_winner'] else " [LOSS]"
+                    if row.get('exit_reason') and pd.notna(row.get('exit_reason')):
+                        exit_str = f" ({row['exit_reason']})"
+                if row.get('trading_days_held', 0) > 0:
+                    days_str = f" {int(row['trading_days_held'])}d"
                 print(
-                    f"  {row['ticker']}: {row['predicted_direction']} "
-                    f"(conf: {row['confidence']:.1%}) -> {ret_str} [{status}]{winner_str}"
+                    f"  {row['ticker']}: {ret_str}{days_str} [{status}]{exit_str}{winner_str}"
                 )
 
         print("\n" + "=" * 60)
